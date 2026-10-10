@@ -6,7 +6,7 @@
 import React, { useState } from 'react';
 import { runClientMonteCarloSimulation, SimulationResult } from '../services/simulationEngine';
 import { SportingEvent } from '../types/database';
-import { Cpu, Play, BarChart3, Server, CheckCircle2, Clock, Zap, Activity } from 'lucide-react';
+import { Cpu, Play, BarChart3, Server, CheckCircle2, Clock, Zap, Activity, Atom } from 'lucide-react';
 
 interface SimulationLabViewProps {
   events: SportingEvent[];
@@ -20,6 +20,10 @@ export const SimulationLabView: React.FC<SimulationLabViewProps> = ({ events }) 
   const [awayRating, setAwayRating] = useState<number>(4.52);
   const [marketMoneyline, setMarketMoneyline] = useState<number>(-120);
 
+  // Quantum Governor Controls
+  const [leverageIndex, setLeverageIndex] = useState<number>(0.25);
+  const [phaseThetaDegrees, setPhaseThetaDegrees] = useState<number>(30);
+
   const [simulationResult, setSimulationResult] = useState<SimulationResult | null>(() => {
     return runClientMonteCarloSimulation(
       'sim_init_braves_phillies',
@@ -28,7 +32,10 @@ export const SimulationLabView: React.FC<SimulationLabViewProps> = ({ events }) 
       'Philadelphia Phillies',
       4.75,
       4.52,
-      -120
+      -120,
+      'Clay',
+      0.25,
+      (30 * Math.PI) / 180
     );
   });
 
@@ -63,6 +70,7 @@ export const SimulationLabView: React.FC<SimulationLabViewProps> = ({ events }) 
 
   const handleRunSimulation = () => {
     const eventId = `manual_sim_${selectedSport}_${Date.now()}`;
+    const phaseThetaRadians = (phaseThetaDegrees * Math.PI) / 180;
     const res = runClientMonteCarloSimulation(
       eventId,
       selectedSport,
@@ -70,7 +78,10 @@ export const SimulationLabView: React.FC<SimulationLabViewProps> = ({ events }) 
       awayParticipant,
       homeRating,
       awayRating,
-      marketMoneyline
+      marketMoneyline,
+      'Clay',
+      leverageIndex,
+      phaseThetaRadians
     );
     setSimulationResult(res);
   };
@@ -80,9 +91,9 @@ export const SimulationLabView: React.FC<SimulationLabViewProps> = ({ events }) 
       {/* Header and Worker Architecture Overview */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h2 className="text-base font-semibold text-white">Batch 2: Vectorized Monte Carlo & Worker Lab</h2>
+          <h2 className="text-base font-semibold text-white">Quantum 50,003 Monte Carlo & Worker Lab</h2>
           <p className="text-xs text-slate-400">
-            Vectorized NumPy calculations running exactly <span className="font-mono text-emerald-400 font-medium">50,003 iterations</span> alongside asynchronous Celery workers
+            Yukalov-Sornette Quantum Governor intercepting <span className="font-mono text-emerald-400 font-medium">50,003 vectorized iterations</span> across Peace & Chaos states
           </p>
         </div>
 
@@ -187,7 +198,29 @@ export const SimulationLabView: React.FC<SimulationLabViewProps> = ({ events }) 
             </div>
           </div>
 
-          {/* Market Moneyline Line */}
+          {/* The Geter Principle: Quantum Leverage Slider */}
+          <div className="p-3 bg-[#080c14] rounded border border-white/[0.06] space-y-2">
+            <div className="flex items-center justify-between text-xs font-mono">
+              <span className="text-slate-300 flex items-center gap-1">
+                <Atom className="w-3.5 h-3.5 text-emerald-400" />
+                <span>Quantum Leverage</span>
+              </span>
+              <span className={`font-bold ${leverageIndex >= 0.5 ? 'text-violet-400' : 'text-emerald-400'}`}>
+                {leverageIndex >= 0.5 ? 'CHAOS' : 'PEACE'} ({leverageIndex.toFixed(2)})
+              </span>
+            </div>
+            <input
+              type="range"
+              min="0"
+              max="1"
+              step="0.05"
+              value={leverageIndex}
+              onChange={(e) => setLeverageIndex(parseFloat(e.target.value))}
+              className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-emerald-500"
+            />
+          </div>
+
+          {/* Market Moneyline */}
           <div>
             <label className="block text-slate-400 text-xs mb-1 font-mono">Market Moneyline (for Kelly Alpha)</label>
             <input
@@ -223,21 +256,44 @@ export const SimulationLabView: React.FC<SimulationLabViewProps> = ({ events }) 
                   </div>
                 </div>
 
-                <div className="flex items-center gap-2 text-xs font-mono text-emerald-400 bg-emerald-500/10 px-2.5 py-1 rounded border border-emerald-500/20">
-                  <Activity className="w-3.5 h-3.5" />
-                  <span>Execution Latency: {simulationResult.executionDurationMs} ms</span>
+                <div className="flex items-center gap-2">
+                  <span className={`text-[10px] font-mono uppercase px-2 py-0.5 rounded font-bold border ${
+                    simulationResult.quantumState.stateMode === 'PEACE'
+                      ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
+                      : 'bg-violet-500/10 text-violet-400 border-violet-500/30'
+                  }`}>
+                    {simulationResult.quantumState.stateMode} STATE
+                  </span>
+                  <div className="flex items-center gap-1.5 text-xs font-mono text-emerald-400 bg-emerald-500/10 px-2.5 py-1 rounded border border-emerald-500/20">
+                    <Activity className="w-3.5 h-3.5" />
+                    <span>{simulationResult.executionDurationMs} ms</span>
+                  </div>
                 </div>
               </div>
 
               {/* Core Distribution Metric Strip */}
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
                 <div className="p-3 bg-[#080c14] rounded border border-white/[0.04]">
-                  <div className="text-slate-400">Win Probability</div>
+                  <div className="text-slate-400">Governed Win Prob</div>
                   <div className="mt-1 font-mono text-base font-bold text-emerald-400">
                     {(simulationResult.homeWinProbability * 100).toFixed(1)}%
                   </div>
                   <div className="text-[10px] text-slate-500 font-mono">
-                    Away: {(simulationResult.awayWinProbability * 100).toFixed(1)}%
+                    Classical: {(simulationResult.quantumState.classicalF * 100).toFixed(1)}%
+                  </div>
+                </div>
+
+                <div className="p-3 bg-[#080c14] rounded border border-white/[0.04]">
+                  <div className="text-slate-400">Quantum Interference q(π)</div>
+                  <div className={`mt-1 font-mono text-base font-bold ${
+                    simulationResult.quantumState.quantumQ > 0 ? 'text-emerald-400' : 'text-slate-300'
+                  }`}>
+                    {simulationResult.quantumState.quantumQ > 0
+                      ? `+${(simulationResult.quantumState.quantumQ * 100).toFixed(2)}%`
+                      : `${(simulationResult.quantumState.quantumQ * 100).toFixed(2)}%`}
+                  </div>
+                  <div className="text-[10px] text-slate-500 font-mono">
+                    Volatility: {simulationResult.quantumState.volatilityExpansion.toFixed(2)}×
                   </div>
                 </div>
 
@@ -251,16 +307,6 @@ export const SimulationLabView: React.FC<SimulationLabViewProps> = ({ events }) 
                   </div>
                   <div className="text-[10px] text-slate-500 font-mono">
                     90% MC: [{simulationResult.p05ScoreDiff}, {simulationResult.p95ScoreDiff}]
-                  </div>
-                </div>
-
-                <div className="p-3 bg-[#080c14] rounded border border-white/[0.04]">
-                  <div className="text-slate-400">Predicted Total</div>
-                  <div className="mt-1 font-mono text-base font-bold text-white">
-                    {simulationResult.predictedTotalScore} pts
-                  </div>
-                  <div className="text-[10px] text-slate-500 font-mono">
-                    90% MC: [{simulationResult.p05TotalScore}, {simulationResult.p95TotalScore}]
                   </div>
                 </div>
 
@@ -297,7 +343,11 @@ export const SimulationLabView: React.FC<SimulationLabViewProps> = ({ events }) 
                           {h.percentage}%
                         </div>
                         <div
-                          className="w-full bg-emerald-500/30 hover:bg-emerald-500/60 border border-emerald-500/40 rounded-t transition-all"
+                          className={`w-full rounded-t transition-all ${
+                            simulationResult.quantumState.stateMode === 'PEACE'
+                              ? 'bg-emerald-500/30 hover:bg-emerald-500/60 border border-emerald-500/40'
+                              : 'bg-violet-500/30 hover:bg-violet-500/60 border border-violet-500/40'
+                          }`}
                           style={{ height: `${Math.max(8, h.percentage * 2.8)}%` }}
                         />
                         <div className="mt-1.5 text-[9px] font-mono text-slate-500 truncate w-full text-center">

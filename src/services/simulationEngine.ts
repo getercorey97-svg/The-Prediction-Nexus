@@ -3,6 +3,17 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+export interface QuantumStateData {
+  stateMode: 'PEACE' | 'CHAOS';
+  leverageIndex: number;
+  phaseTheta: number;
+  classicalF: number;
+  quantumQ: number;
+  governedP: number;
+  volatilityExpansion: number;
+  inflectionTrigger: string;
+}
+
 export interface SimulationResult {
   eventId: string;
   sport: string;
@@ -20,11 +31,69 @@ export interface SimulationResult {
   kellyCriterionFraction: number | null;
   executionDurationMs: number;
   histogram: { bucket: string; count: number; percentage: number }[];
+  quantumState: QuantumStateData;
 }
 
 /**
- * Simple deterministic 32-bit PRNG (Mulberry32) seeded from string hash.
+ * Evaluates the Yukalov-Sornette (YS) Quantum Decision Theory formula
+ * governed by The Geter Principle (The Chaos or Peace Paradox).
  */
+export function evaluateQuantumGovernor(
+  classicalProb: number,
+  leverageIndex = 0.2,
+  phaseTheta = 0.0,
+  inflectionTrigger?: string
+): QuantumStateData {
+  const f = Math.max(0.001, Math.min(0.999, classicalProb));
+  const leverage = Math.max(0.0, Math.min(1.0, leverageIndex));
+
+  // The Geter Principle threshold
+  if (leverage < 0.5) {
+    // PEACE STATE
+    return {
+      stateMode: 'PEACE',
+      leverageIndex: Number(leverage.toFixed(4)),
+      phaseTheta: Number(phaseTheta.toFixed(4)),
+      classicalF: Number(f.toFixed(4)),
+      quantumQ: 0.0,
+      governedP: Number(f.toFixed(4)),
+      volatilityExpansion: 1.0,
+      inflectionTrigger:
+        inflectionTrigger || 'Peace State: game momentum aligns with classical statistical expectation.',
+    };
+  } else {
+    // CHAOS STATE: q(π) = 2 * sqrt(f * (1 - f)) * cos(θ)
+    const maxAmp = 2.0 * Math.sqrt(f * (1.0 - f));
+    const chaosIntensity = (leverage - 0.5) / 0.5;
+    const activeAmp = maxAmp * chaosIntensity;
+    const q = activeAmp * Math.cos(phaseTheta);
+
+    // Sigmoidal log-odds projection preserving (0, 1)
+    const logitF = Math.log(f / (1.0 - f));
+    const denom = Math.max(0.01, Math.sqrt(f * (1.0 - f)));
+    const deltaQ = q / denom;
+    const logitP = logitF + deltaQ;
+    let p = 1.0 / (1.0 + Math.exp(-logitP));
+    p = Math.max(0.001, Math.min(0.999, p));
+
+    const volatility = 1.0 + Math.abs(q) * 0.75;
+    const trig =
+      inflectionTrigger ||
+      `Chaos State: High-leverage inflection event (Leverage: ${(leverage * 100).toFixed(0)}%, θ: ${((phaseTheta * 180) / Math.PI).toFixed(0)}°).`;
+
+    return {
+      stateMode: 'CHAOS',
+      leverageIndex: Number(leverage.toFixed(4)),
+      phaseTheta: Number(phaseTheta.toFixed(4)),
+      classicalF: Number(f.toFixed(4)),
+      quantumQ: Number(q.toFixed(4)),
+      governedP: Number(p.toFixed(4)),
+      volatilityExpansion: Number(volatility.toFixed(4)),
+      inflectionTrigger: trig,
+    };
+  }
+}
+
 function createDeterministicRng(seedString: string) {
   let h = 0;
   for (let i = 0; i < seedString.length; i++) {
@@ -39,9 +108,6 @@ function createDeterministicRng(seedString: string) {
   };
 }
 
-/**
- * Standard Normal Box-Muller transform
- */
 function randomNormal(rng: () => number, mean = 0, std = 1): number {
   let u1 = rng();
   let u2 = rng();
@@ -50,9 +116,6 @@ function randomNormal(rng: () => number, mean = 0, std = 1): number {
   return z0 * std + mean;
 }
 
-/**
- * Poisson random variate using Knuth's algorithm
- */
 function randomPoisson(rng: () => number, lambda: number): number {
   if (lambda < 30) {
     const L = Math.exp(-lambda);
@@ -70,7 +133,7 @@ function randomPoisson(rng: () => number, lambda: number): number {
 
 /**
  * Vectorized in-browser simulation executing exactly 50,003 iterations,
- * mirroring backend/engine/monte_carlo.py
+ * intercepted by the Yukalov-Sornette Quantum Governor.
  */
 export function runClientMonteCarloSimulation(
   eventId: string,
@@ -80,56 +143,80 @@ export function runClientMonteCarloSimulation(
   homeRating: number,
   awayRating: number,
   marketHomeMoneyline: number | null = -115,
-  surface: string = 'Clay'
+  surface: string = 'Clay',
+  leverageIndex = 0.2,
+  phaseTheta = 0.0,
+  inflectionTrigger?: string
 ): SimulationResult {
   const startTime = performance.now();
   const ITERATIONS = 50003;
   const rng = createDeterministicRng(eventId);
+
+  const sportNorm = sport.toLowerCase().trim();
+
+  // Compute classical frequentist baseline f(π)
+  let classicalF = 0.5;
+  if (sportNorm === 'tennis') {
+    const eloDelta = homeRating - awayRating;
+    classicalF = 1.0 / (1.0 + Math.pow(10, -eloDelta / 400.0));
+  } else if (sportNorm === 'mlb') {
+    const g = 1.83;
+    const rH = Math.pow(Math.max(1, homeRating), g);
+    const rA = Math.pow(Math.max(1, awayRating), g);
+    classicalF = rH / (rH + rA);
+  } else {
+    const diff = homeRating - awayRating;
+    classicalF = 0.5 + Math.min(0.48, Math.max(-0.48, diff * 0.8));
+  }
+
+  // Intercept with Quantum Governor
+  const qState = evaluateQuantumGovernor(classicalF, leverageIndex, phaseTheta, inflectionTrigger);
 
   const margins: number[] = new Float32Array(ITERATIONS) as any;
   const totals: number[] = new Float32Array(ITERATIONS) as any;
 
   let homeWins = 0;
   let ties = 0;
-  const sportNorm = sport.toLowerCase().trim();
 
   for (let i = 0; i < ITERATIONS; i++) {
     let homeScore = 0;
     let awayScore = 0;
 
     if (sportNorm === 'mlb') {
-      const lamHome = Math.max(1.5, homeRating * 1.02);
-      const lamAway = Math.max(1.5, awayRating * 0.98);
+      const shift = qState.quantumQ * 1.5;
+      const lamHome = Math.max(1.5, (homeRating + shift) * 1.02);
+      const lamAway = Math.max(1.5, (awayRating - shift) * 0.98);
       homeScore = randomPoisson(rng, lamHome);
       awayScore = randomPoisson(rng, lamAway);
       if (homeScore === awayScore) {
-        if (rng() < 0.525) homeScore += 1;
+        if (rng() < 0.525 + qState.quantumQ * 0.2) homeScore += 1;
         else awayScore += 1;
       }
     } else if (sportNorm === 'cfb') {
       const hfa = 2.4;
-      const std = 15.2 * 0.95;
-      const meanHome = 28.5 + homeRating * 18.0 + hfa / 2;
-      const meanAway = 26.0 + awayRating * 18.0 - hfa / 2;
+      const std = 15.2 * 0.95 * qState.volatilityExpansion;
+      const shift = qState.quantumQ * 6.5;
+      const meanHome = 28.5 + homeRating * 18.0 + hfa / 2 + shift;
+      const meanAway = 26.0 + awayRating * 18.0 - hfa / 2 - shift;
       homeScore = Math.max(0, Math.round(randomNormal(rng, meanHome, std)));
       awayScore = Math.max(0, Math.round(randomNormal(rng, meanAway, std)));
       if (homeScore === awayScore) {
-        if (rng() < 0.51) homeScore += 3;
+        if (rng() < 0.51 + qState.quantumQ * 0.15) homeScore += 3;
         else awayScore += 3;
       }
     } else if (sportNorm === 'nfl') {
-      const std = 12.8;
-      const meanHome = 23.5 + homeRating * 15.0 + 1.5;
-      const meanAway = 21.0 + awayRating * 15.0 - 1.5;
+      const std = 12.8 * qState.volatilityExpansion;
+      const shift = qState.quantumQ * 5.0;
+      const meanHome = 23.5 + homeRating * 15.0 + 1.5 + shift;
+      const meanAway = 21.0 + awayRating * 15.0 - 1.5 - shift;
       homeScore = Math.max(0, Math.round(randomNormal(rng, meanHome, std)));
       awayScore = Math.max(0, Math.round(randomNormal(rng, meanAway, std)));
       if (homeScore === awayScore) {
-        if (rng() < 0.52) homeScore += 3;
+        if (rng() < 0.52 + qState.quantumQ * 0.15) homeScore += 3;
         else awayScore += 3;
       }
     } else if (sportNorm === 'tennis') {
-      const eloDelta = homeRating - awayRating;
-      const p = 1.0 / (1.0 + Math.pow(10, -eloDelta / 400.0));
+      const p = qState.governedP;
       const s1 = rng() < p;
       const s2 = rng() < p;
       let hSets = (s1 ? 1 : 0) + (s2 ? 1 : 0);
@@ -141,8 +228,10 @@ export function runClientMonteCarloSimulation(
       homeScore = hSets;
       awayScore = aSets;
     } else {
-      homeScore = Math.max(0, Math.round(randomNormal(rng, homeRating, 10)));
-      awayScore = Math.max(0, Math.round(randomNormal(rng, awayRating, 10)));
+      const std = 10 * qState.volatilityExpansion;
+      const shift = qState.quantumQ * 3.0;
+      homeScore = Math.max(0, Math.round(randomNormal(rng, homeRating + shift, std)));
+      awayScore = Math.max(0, Math.round(randomNormal(rng, awayRating - shift, std)));
     }
 
     const margin = homeScore - awayScore;
@@ -158,8 +247,7 @@ export function runClientMonteCarloSimulation(
   const homeWinProb = (homeWins + 0.5 * ties) / ITERATIONS;
   const awayWinProb = 1.0 - homeWinProb;
 
-  // Sort samples to compute exact percentiles
-  // To avoid sorting entire 50,003 array on every tick, sort a 5,000 uniform sub-sample
+  // Subsample for fast percentile computation
   const sampleSize = 5000;
   const sampleMargins: number[] = [];
   const sampleTotals: number[] = [];
@@ -185,7 +273,6 @@ export function runClientMonteCarloSimulation(
   const p05Total = Number(sampleTotals[Math.floor(sampleTotals.length * 0.05)].toFixed(2));
   const p95Total = Number(sampleTotals[Math.floor(sampleTotals.length * 0.95)].toFixed(2));
 
-  // Compute 7-bucket histogram of margins for visualization
   const minM = sampleMargins[0];
   const maxM = sampleMargins[sampleMargins.length - 1];
   const bucketWidth = (maxM - minM) / 7 || 1;
@@ -247,5 +334,6 @@ export function runClientMonteCarloSimulation(
     kellyCriterionFraction: kelly,
     executionDurationMs: Number(duration.toFixed(2)),
     histogram,
+    quantumState: qState,
   };
 }
