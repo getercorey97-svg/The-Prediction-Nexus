@@ -1,6 +1,6 @@
-# The Prediction Nexus: Yukalov-Sornette Quantum Decision Theory & The Geter Principle Upgrade
+# The Prediction Nexus: 3-Tier Live Multi-Scraper & Cross-Enrichment Pipeline
 
-Architectural and quantitative implementation plan for upgrading **The Prediction Nexus** with the **Yukalov-Sornette (YS) Quantum Decision Theory** framework governed by **The Geter Principle (The Chaos or Peace Paradox)**.
+Architectural refactoring plan to eliminate all static 2024–2025 mock/seed events and establish an autonomous 3-Tier Live Multi-Scraper and Cross-Enrichment Pipeline for MLB, CFB, NFL, and Tennis, complete with automated FastAPI startup synchronization and direct Supabase database upserts.
 
 ---
 
@@ -9,97 +9,112 @@ Architectural and quantitative implementation plan for upgrading **The Predictio
 > [!IMPORTANT]
 > The following parameters were confirmed during Phase 1 clarification:
 
-- **Probability Normalization Method**: Sigmoidal log-odds projection preserving the strict unit interval $[0.001, 0.999]$ while allowing mathematically unbounded phase oscillations:
-  $$\text{logit}(p(\pi)) = \text{logit}(f(\pi)) + \frac{q(\pi)}{\sqrt{f(\pi)(1 - f(\pi))}}$$
-- **Quantum Inspector Interaction**: An interactive leverage slider in the UI ($0.0 \to 1.0$) driving seamless transitions between the **Peace State** (low leverage, $q(\pi) \to 0$) and the **Chaos State** (high leverage, active phase interference $\theta$).
-- **Distribution Shift in Monte Carlo Generator**: Shifts the mean expected score margin proportionally to $q(\pi)$ while simultaneously triggering **quantum volatility expansion** (variance dilation) in the 50,003 NumPy iteration arrays during Chaos states.
+- **Schedule Query Window**: When a sport has zero games on today's calendar date, the pipeline automatically queries a rolling window of upcoming 7 days plus recently completed matches, ensuring the dashboard always displays active, verifiable sporting fixtures without static stubs.
+- **Environmental & Dome Stadium Handling**: Outdoor venues query the Open-Meteo Live Weather API for real-time temperature, wind speed/direction, humidity, and precipitation probability; indoor/dome venues are tagged as climate-controlled ($72^\circ\text{F}$, 0 mph wind, 0% precip).
+- **Database Upsert Strategy**: Events are upserted into Supabase on `external_id` using a non-destructive merge policy (`ON CONFLICT (external_id) DO UPDATE`), preserving existing Monte Carlo simulation predictions, factual post-mortems, and trigger states while updating live scores and statuses.
+- **Zero Static Mock Data Mandate**: Complete removal of all hardcoded 2024–2025 mock matchups (e.g., Oct 30 2024 Yankees vs Dodgers, Jan 8 2024 Michigan vs Washington, Feb 11 2024 Chiefs vs 49ers, Jun 9 2024 Alcaraz vs Zverev). The application and API endpoints will exclusively serve empirical live data.
 
 ---
 
 ### 1. Overview & Core Concept
 
-Classical sports betting models rely purely on utility and frequentist probability ($f(\pi)$), failing to capture nonlinear subjective momentum shifts during sudden, high-stress game states. This upgrade introduces the **Yukalov-Sornette (YS) Quantum Decision Theory**:
+This refactor transforms **The Prediction Nexus** into a fully autonomous, live-connected sports analytics engine:
 
-$$p(\pi) = f(\pi) + q(\pi)$$
-
-Where:
-- $f(\pi)$ is the classical rational probability derived from verifiable sport fundamentals (MLB BaseRuns/FIP, CFB EPA/Havoc, NFL EPA/CPOE, Tennis Surface Elo).
-- $q(\pi)$ is the **quantum interference term** modeling cognitive and emotional state superposition under uncertainty:
-  $$q(\pi) = 2 \sqrt{f(\pi)(1 - f(\pi))} \cos(\theta)$$
-- **The Geter Principle (The Chaos or Peace Paradox)** acts as the quantum decoherence governor:
-  - **Peace State** (Normal/Equilibrium Flow): When game momentum aligns with statistical expectations, the quantum phase decoheres ($\cos(\theta) \to 0$ or leverage dampener $\lambda \to 0$), leaving $q(\pi) \to 0$ and yielding pure classical dominance $p(\pi) = f(\pi)$.
-  - **Chaos State** (High-Leverage Inflection): Triggered when match pressure exceeds the critical threshold (late innings, red-zone 4th downs, break-point saves, sudden momentum swings). The governor activates full phase interference $q(\pi)$, shifting win probabilities and expanding stochastic variance across the 50,003 Monte Carlo iterations.
+1. **Tier 1 (Primary Live Scraper - ESPN Hidden API)**:
+   - Queries official hidden REST endpoints at `site.api.espn.com/apis/site/v2/sports/`:
+     - MLB: `baseball/leagues/mlb/scoreboard`
+     - CFB: `football/leagues/college-football/scoreboard`
+     - NFL: `football/leagues/nfl/scoreboard`
+     - Tennis: `tennis/leagues/atp/scoreboard` and `tennis/leagues/wta/scoreboard`
+   - Extracts real event IDs, live match statuses (`STATUS_SCHEDULED`, `STATUS_IN_PROGRESS`, `STATUS_FINAL`), start times, home/away competitors, box scores, venues, surfaces, and consensus betting odds.
+2. **Tier 2 (Secondary Scraper & Advanced Metrics Enricher)**:
+   - Automatic failover if ESPN is unreachable (MLB StatsAPI, Yahoo Sports JSON, SofaScore).
+   - Enriches games with micro-variables omitted by Tier 1: team BaseRuns & pitcher FIP (MLB), offensive/defensive EPA/play and Havoc rates (CFB/NFL), and surface-specific Elo ratings with break/hold percentages (Tennis).
+3. **Tier 3 (Tertiary Scraper & Environmental Enricher)**:
+   - Queries **Open-Meteo Live Weather API** (`api.open-meteo.com/v1/forecast`) using venue geographical coordinates.
+   - Enriches every outdoor matchup with exact temperature, wind speed/direction, relative humidity, and precipitation risk.
+   - Calculates rest-day differentials and travel fatigue metrics.
+4. **FastAPI Lifespan Startup & Supabase Synchronization**:
+   - Executes automatic ingestion on server boot / wake-up via `@asynccontextmanager(app: FastAPI)` in `backend/main.py`.
+   - Directly upserts normalized events into Supabase PostgreSQL using `SUPABASE_SERVICE_ROLE_KEY`.
+5. **Frontend Live Binding**:
+   - Configures dual env var resolution (`VITE_` and `NEXT_PUBLIC_`) with production fallbacks to `https://nexus-api-3qk0.onrender.com` and `https://aywldwdvflwcanqxxdhi.supabase.co`.
+   - Replaces static seed arrays with live state synchronization from `GET /api/events` and Supabase Realtime WebSockets.
 
 ---
 
 ### 2. User Experience & Visual Design
 
-- **Quantum State Inspector Panel (`src/components/FactorDecompositionView.tsx`)**:
-  - Live status indicator: **PEACE STATE** (emerald baseline) vs. **CHAOS STATE** (amber/violet quantum interference).
-  - Interactive **Game Leverage Index** slider ($0.0 \times$ to $1.0 \times$).
-  - Phase Angle $\theta$ selector ($0^\circ \to 360^\circ$) representing constructive interference (positive surge) vs. destructive interference (choke/negative shock).
-  - Comparative metrics bar:
-    - Classical Probability $f(\pi)$
-    - Quantum Interference $q(\pi)$
-    - Resulting Quantum-Governed Probability $p(\pi)$
-    - Volatility Expansion Multiplier ($1.0\times \to 1.45\times$)
-  - Interference Wave visualization: Dynamic trigonometric sine/cosine curve illustrating phase shift $\cos(\theta)$.
+- **Live Multi-Sport Monitor**:
+  - Displays live scores, in-progress game clocks/innings/sets, and scheduled fixtures across MLB, CFB, NFL, and Tennis.
+  - Live environmental indicators: Outdoor weather badges (e.g., $68^\circ\text{F}$ · 8 mph NNW · 12% precip) vs. Climate-Controlled Dome badges.
+  - Live bookmaker market consensus lines directly scraped from Tier 1/Tier 2.
+- **Realtime Trigger Workbench**:
+  - "Refresh Live Ingestion" button triggering background pipeline execution across all four sports.
+  - "Simulate Match Completion" testing live score triggers directly on current calendar matchups.
+- **Anti-Slop Restraint**:
+  - Deep slate dark terminal theme (`#080c14`), hairline structural borders (`rgba(255, 255, 255, 0.08)`), clean unboxed metadata with `·` separators, tabular figures for all scores, odds, and weather metrics.
 
 ---
 
 ### 3. Key Product Decisions & Trade-Offs
 
-- **Decision 1: Sigmoidal Log-Odds Projection vs. Hard Clamping**
-  - *Chosen Approach*: Sigmoidal mapping $\text{logit}(p) = \text{logit}(f) + \delta_q$.
-  - *Why*: Direct linear addition $f(\pi) + q(\pi)$ can breach $[0, 1]$ when $f(\pi)$ is near boundaries (e.g., $0.85 + 0.20 = 1.05$). Sigmoidal projection naturally squashes extreme shifts, ensuring mathematically rigorous probabilities while preserving sensitivity.
-- **Decision 2: Volatility Expansion During Chaos**
-  - *Chosen Approach*: Dilation of the covariance matrix by $(1 + |q(\pi)| \times 0.75)$ during Chaos states in 50,003 Monte Carlo simulations.
-  - *Why*: High-leverage inflection moments not only shift expected outcomes but inherently increase game variance (wild finishes, sudden overtime, blowout runs).
+- **Decision 1: ESPN Hidden API as Tier 1 Primary**
+  - *Chosen Approach*: Official JSON endpoints at `site.api.espn.com`.
+  - *Why*: Free, extremely high availability, sub-minute latency for live scores, zero API key requirement, and comprehensive multi-sport coverage including ATP/WTA tennis.
+- **Decision 2: Circuit Breaker with Cross-Source Enrichment**
+  - *Chosen Approach*: Rather than simple failover, Tiers 2 and 3 actively enrich Tier 1 records with metrics ESPN does not track (Statcast FIP, EPA, Havoc, and Open-Meteo weather).
+  - *Why*: Delivers an institutional-grade predictive dataset with high dimensionality without paying for expensive private enterprise sports data APIs.
+- **Decision 3: Non-Blocking FastAPI Lifespan Ingestion**
+  - *Chosen Approach*: Background task triggered inside FastAPI lifespan startup.
+  - *Why*: Prevents Render web service boot timeouts (Render health check must pass in $< 30\text{s}$) while ensuring the database is immediately hydrated with live sporting slates.
 
 ---
 
-### 4. Technical Architecture & Component Tree
+### 4. Technical Architecture & File Plan
 
 ```
 ┌────────────────────────────────────────────────────────────────────────┐
-│                   YUKALOV-SORNETTE QUANTUM ECOSYSTEM                   │
+│                   3-TIER LIVE MULTI-SCRAPER PIPELINE                   │
 ├────────────────────────────────────────────────────────────────────────┤
 │                                                                        │
-│   The Geter Principle Decoherence Governor                             │
-│   backend/engine/quantum_governor.py                                   │
-│   ├── YS Formula: p(π) = f(π) + q(π)                                   │
-│   ├── Peace State: q(π) -> 0                                           │
-│   └── Chaos State: q(π) = 2 * sqrt(f * (1-f)) * cos(θ)                 │
+│   FastAPI Lifespan (Startup) & Worker Trigger                          │
+│   backend/main.py                                                      │
+│   └── background_tasks.add_task(run_unified_ingestion_pipeline)        │
 │                                                                        │
-│                      │ Injects quantum term                            │
-│                      ▼                                                 │
-│   Vectorized Monte Carlo Generator                                     │
-│   backend/engine/monte_carlo.py (Updated)                              │
-│   ├── Intercepts f(π)                                                  │
-│   ├── Applies q(π) shift to mean expected margin                       │
-│   └── Expands NumPy distribution variance (50,003 iterations)          │
+│   Tier 1: Primary Live Scraper (backend/ingestion/tier1_espn.py)       │
+│   └── site.api.espn.com/apis/site/v2/sports/ (MLB, CFB, NFL, Tennis)   │
+│       ├── Live status, start times, scores, participants, venues       │
+│       └── Consensus betting odds & bookmaker lines                     │
 │                                                                        │
-│                      │ Scans high-leverage triggers                    │
-│                      ▼                                                 │
-│   Sport Framework Inflection Scanners                                  │
-│   ├── mlb.py    (Leverage Index & Late Bullpen Splits)                 │
-│   ├── cfb.py    (Havoc Spikes & 4th Down Aggression)                   │
-│   ├── nfl.py    (2-Minute Drill & Red-Zone High-Leverage)              │
-│   └── tennis.py (Break-Point Saves & Tiebreak Deciders)                │
+│   Tier 2: Advanced Metrics Enricher (tier2_metrics.py)                 │
+│   └── MLB StatsAPI / Yahoo / SofaScore Failover & Stats                │
+│       ├── MLB: BaseRuns, Pitcher FIP, bullpen leverage                 │
+│       ├── CFB / NFL: Offensive/Defensive EPA/play, Havoc rates         │
+│       └── Tennis: Surface Elo, hold/break %, fatigue                   │
 │                                                                        │
-│                      │ Real-time UI Inspection                         │
-│                      ▼                                                 │
-│   Frontend Quantum Inspector (FactorDecompositionView.tsx)             │
-│   ├── Peace / Chaos State Indicator                                    │
-│   ├── Interactive Leverage Slider                                      │
-│   ├── f(π) vs q(π) vs p(π) Breakdown                                   │
-│   └── Quantum Phase Interference Wave Display                          │
+│   Tier 3: Environmental Enricher (tier3_environment.py)                │
+│   └── Open-Meteo Live Weather API (api.open-meteo.com)                 │
+│       ├── Venue coordinates -> temp, wind speed/dir, precip %          │
+│       └── Climate-controlled indoor constants (72°F, 0 mph)           │
+│                                                                        │
+│   Unified Ingestion Orchestrator (tier_orchestrator.py)                │
+│   └── Deep-merges Tiers 1-3 -> upserts directly to Supabase            │
+│                                                                        │
+│   Frontend Data Binding (src/services/apiConfig.ts & nexusStore.ts)    │
+│   └── Dual env resolution (VITE_ / NEXT_PUBLIC_)                       │
+│   └── Zero static seed arrays; live hydration on load                  │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
-#### Detailed Files to Generate/Update:
-1. `backend/engine/quantum_governor.py`: The Geter Principle Decoherence Governor implementing the full Yukalov-Sornette formula, sigmoidal projection, Peace/Chaos states, and inflection detection.
-2. `backend/engine/monte_carlo.py`: Update to intercept $f(\pi)$, evaluate game leverage state, shift expected spreads, and dilate variance across 50,003 NumPy iterations.
-3. `backend/ingestion/mlb.py`, `cfb.py`, `nfl.py`, `tennis.py`: Update with inflection event triggers and $\theta$ phase shift modulations.
-4. `src/services/simulationEngine.ts`: Mirror quantum governor logic in client runner so web simulations reflect the exact YS formulas.
-5. `src/components/FactorDecompositionView.tsx`: Integrate the Quantum State Inspector panel with live leverage slider, state indicators, and phase curve graphics.
+#### Detailed Files to Create / Modify:
+1. `backend/ingestion/tier1_espn.py`: Live scoreboard and schedule scraper for MLB, CFB, NFL, and Tennis using ESPN Hidden API.
+2. `backend/ingestion/tier2_metrics.py`: Secondary scraper and metrics enricher (FIP, EPA, Havoc, Surface Elo).
+3. `backend/ingestion/tier3_environment.py`: Open-Meteo Live Weather API caller with stadium coordinate dictionary.
+4. `backend/ingestion/tier_orchestrator.py`: Unified pipeline orchestrator with circuit-breaker failovers and Supabase PostgreSQL upserts.
+5. `backend/main.py`: Refactor with FastAPI lifespan startup trigger, live `GET /api/events`, and pipeline endpoints.
+6. `backend/tasks.py`: Updated Celery tasks to call `run_unified_ingestion_pipeline`.
+7. `src/services/apiConfig.ts`: Dual-env configuration supporting `VITE_` and `NEXT_PUBLIC_` with Render and Supabase fallbacks.
+8. `src/services/nexusStore.ts`: Eliminate hardcoded seed arrays; fetch live events from API/Supabase on mount.
+9. `src/data/seedData.ts`: Purge all static 2024-2025 matches; export clean empty defaults and model configurations.
+10. `src/components/OverviewView.tsx`, `MonteCarloView.tsx`, `SimulationLabView.tsx`: Live data bindings with real-time refresh triggers.

@@ -488,141 +488,22 @@ CREATE POLICY "Allow service workers to inspect autonomous_upgrades"
     USING (auth.role() = 'authenticated' OR auth.role() = 'service_role');
 
 -- ============================================================================
--- 11. VERIFIABLE EMPIRICAL SEED DATA
--- Factual historical and live sporting matchups across MLB, CFB, NFL, and Tennis.
--- Includes official completed scores with verified Brier post-mortems and
--- active scheduled events awaiting post-mortems.
+-- 11. ACTIVE MODEL FRAMEWORKS INITIALIZATION
+-- Initializes the 4 sport quantitative frameworks in framework_versions.
+-- Sporting events and Monte Carlo distributions are dynamically populated
+-- by the autonomous 3-Tier Multi-Scraper pipeline (Tier 1 ESPN + Tier 2 Metrics + Tier 3 Open-Meteo).
 -- ============================================================================
 
 -- Framework versions for each sport
 INSERT INTO framework_versions (id, sport, version_tag, description, parameters, ewma_alpha, learning_rate, is_active, cumulative_brier_score, evaluated_event_count)
 VALUES
-    ('a0000000-0000-0000-0000-000000000001', 'mlb', 'MLB-BASERUNS-FIP-v3.2', 'MLB Quantitative Engine based on BaseRuns offensive generation and Pitcher FIP splits.', '{"baseruns_weight": 0.58, "fip_pitcher_weight": 0.32, "bullpen_leverage_weight": 0.10, "park_factor_enabled": true, "variance_dampener": 0.98, "calibration_confidence": 0.82}'::jsonb, 0.0500, 0.0250, true, 0.184210, 48),
-    ('a0000000-0000-0000-0000-000000000002', 'cfb', 'CFB-EPA-HAVOC-v4.1', 'College Football Model applying Expected Points Added (EPA/play) & Havoc Rate differentials.', '{"offense_epa_weight": 0.45, "defense_epa_weight": 0.35, "havoc_differential_weight": 0.15, "home_field_advantage_pts": 2.4, "variance_dampener": 0.95, "calibration_confidence": 0.79}'::jsonb, 0.0600, 0.0300, true, 0.198450, 32),
-    ('a0000000-0000-0000-0000-000000000003', 'nfl', 'NFL-EPA-CPOE-v5.0', 'NFL Vectorized Simulator based on QB CPOE and Success Rate differentials.', '{"pass_epa_weight": 0.40, "rush_epa_weight": 0.20, "qb_cpoe_weight": 0.25, "red_zone_success_weight": 0.15, "variance_dampener": 1.00, "calibration_confidence": 0.86}'::jsonb, 0.0450, 0.0200, true, 0.171200, 64),
-    ('a0000000-0000-0000-0000-000000000004', 'tennis', 'TENNIS-SURFACE-ELO-v2.8', 'Tennis Matchup Engine utilizing surface-specific dynamic Elo and return-point win rates.', '{"surface_elo_weight": 0.65, "serve_dominance_weight": 0.20, "fatigue_decay_rate": 0.15, "surface_k_factor": 32, "variance_dampener": 0.96, "calibration_confidence": 0.88}'::jsonb, 0.0500, 0.0250, true, 0.162800, 56)
+    ('a0000000-0000-0000-0000-000000000001', 'mlb', 'MLB-BASERUNS-FIP-v3.2', 'MLB Quantitative Engine based on BaseRuns offensive generation and Pitcher FIP splits.', '{"baseruns_weight": 0.58, "fip_pitcher_weight": 0.32, "bullpen_leverage_weight": 0.10, "park_factor_enabled": true, "variance_dampener": 0.98, "calibration_confidence": 0.82}'::jsonb, 0.0500, 0.0250, true, 0.184210, 0),
+    ('a0000000-0000-0000-0000-000000000002', 'cfb', 'CFB-EPA-HAVOC-v4.1', 'College Football Model applying Expected Points Added (EPA/play) & Havoc Rate differentials.', '{"offense_epa_weight": 0.45, "defense_epa_weight": 0.35, "havoc_differential_weight": 0.15, "home_field_advantage_pts": 2.4, "variance_dampener": 0.95, "calibration_confidence": 0.79}'::jsonb, 0.0600, 0.0300, true, 0.198450, 0),
+    ('a0000000-0000-0000-0000-000000000003', 'nfl', 'NFL-EPA-CPOE-v5.0', 'NFL Vectorized Simulator based on QB CPOE and Success Rate differentials.', '{"pass_epa_weight": 0.40, "rush_epa_weight": 0.20, "qb_cpoe_weight": 0.25, "red_zone_success_weight": 0.15, "variance_dampener": 1.00, "calibration_confidence": 0.86}'::jsonb, 0.0450, 0.0200, true, 0.171200, 0),
+    ('a0000000-0000-0000-0000-000000000004', 'tennis', 'TENNIS-SURFACE-ELO-v2.8', 'Tennis Matchup Engine utilizing surface-specific dynamic Elo and return-point win rates.', '{"surface_elo_weight": 0.65, "serve_dominance_weight": 0.20, "fatigue_decay_rate": 0.15, "surface_k_factor": 32, "variance_dampener": 0.96, "calibration_confidence": 0.88}'::jsonb, 0.0500, 0.0250, true, 0.162800, 0)
 ON CONFLICT (id) DO UPDATE SET
     version_tag = EXCLUDED.version_tag,
     parameters = EXCLUDED.parameters,
     cumulative_brier_score = EXCLUDED.cumulative_brier_score;
-
--- Verified Historical & Active Sporting Events
-INSERT INTO sporting_events (id, sport, external_id, event_date, home_participant, away_participant, surface, venue, status, home_score, away_score, actual_winner, official_metadata)
-VALUES
-    -- MLB Completed: 2024 World Series Game 5 (Dodgers at Yankees)
-    ('b0000000-0000-0000-0000-000000000001', 'mlb', 'MLB_2024_WS_G5_LAD_NYY', '2024-10-30T20:08:00Z', 'New York Yankees', 'Los Angeles Dodgers', NULL, 'Yankee Stadium, Bronx, NY', 'completed', 6, 7, 'Los Angeles Dodgers', '{"series": "World Series G5", "innings": 9, "official_source": "pybaseball"}'::jsonb),
-    -- CFB Completed: 2024 College Football Playoff National Championship (Michigan vs Washington)
-    ('b0000000-0000-0000-0000-000000000002', 'cfb', 'CFB_2024_NCG_MICH_WASH', '2024-01-08T19:30:00Z', 'Michigan Wolverines', 'Washington Huskies', NULL, 'NRG Stadium, Houston, TX', 'completed', 34, 13, 'Michigan Wolverines', '{"bowl": "CFP National Championship", "official_source": "CollegeFootballData"}'::jsonb),
-    -- NFL Completed: Super Bowl LVIII (Chiefs vs 49ers)
-    ('b0000000-0000-0000-0000-000000000003', 'nfl', 'NFL_2024_SB_KC_SF', '2024-02-11T18:30:00Z', 'Kansas City Chiefs', 'San Francisco 49ers', NULL, 'Allegiant Stadium, Las Vegas, NV', 'completed', 25, 22, 'Kansas City Chiefs', '{"championship": "Super Bowl LVIII", "overtime": true, "official_source": "nfl_data_py"}'::jsonb),
-    -- Tennis Completed: 2024 Roland Garros Men Final (Alcaraz vs Zverev)
-    ('b0000000-0000-0000-0000-000000000004', 'tennis', 'TENNIS_2024_RG_FINAL_ALC_ZVE', '2024-06-09T14:30:00Z', 'Carlos Alcaraz', 'Alexander Zverev', 'Clay', 'Court Philippe-Chatrier, Paris', 'completed', 3, 2, 'Carlos Alcaraz', '{"tournament": "Roland Garros Final", "sets": "6-3, 2-6, 5-7, 6-1, 6-2", "official_source": "Live Tennis API"}'::jsonb),
-    -- MLB Scheduled: Upcoming Marquee Matchup
-    ('b0000000-0000-0000-0000-000000000005', 'mlb', 'MLB_2025_REG_ATL_PHI_001', '2025-04-18T19:10:00Z', 'Atlanta Braves', 'Philadelphia Phillies', NULL, 'Truist Park, Atlanta, GA', 'scheduled', NULL, NULL, NULL, '{"probable_pitchers": {"home": "Spencer Strider", "away": "Zack Wheeler"}, "official_source": "pybaseball"}'::jsonb),
-    -- CFB Scheduled: Marquee Matchup
-    ('b0000000-0000-0000-0000-000000000006', 'cfb', 'CFB_2025_REG_UGA_ALA_001', '2025-09-27T19:30:00Z', 'Georgia Bulldogs', 'Alabama Crimson Tide', NULL, 'Sanford Stadium, Athens, GA', 'scheduled', NULL, NULL, NULL, '{"conference": "SEC", "official_source": "CollegeFootballData"}'::jsonb),
-    -- NFL Scheduled: Marquee Matchup
-    ('b0000000-0000-0000-0000-000000000007', 'nfl', 'NFL_2025_REG_BAL_KC_001', '2025-09-04T20:20:00Z', 'Kansas City Chiefs', 'Baltimore Ravens', NULL, 'GEHA Field at Arrowhead, Kansas City, MO', 'scheduled', NULL, NULL, NULL, '{"kickoff": "Thursday Night Football", "official_source": "nfl_data_py"}'::jsonb),
-    -- Tennis Scheduled: ATP Masters 1000 Final Matchup
-    ('b0000000-0000-0000-0000-000000000008', 'tennis', 'TENNIS_2025_M1000_SIN_ALC', '2025-05-18T16:00:00Z', 'Jannik Sinner', 'Carlos Alcaraz', 'Clay', 'Foro Italico, Rome', 'scheduled', NULL, NULL, NULL, '{"round": "Final", "surface": "Clay", "official_source": "Live Tennis API"}'::jsonb)
-ON CONFLICT (id) DO UPDATE SET
-    status = EXCLUDED.status,
-    home_score = EXCLUDED.home_score,
-    away_score = EXCLUDED.away_score,
-    actual_winner = EXCLUDED.actual_winner;
-
--- Monte Carlo Predictions (Aggregated exactly from 50,003 vectorized iterations)
-INSERT INTO monte_carlo_predictions (
-    id, event_id, framework_id, simulation_iterations,
-    home_win_probability, away_win_probability,
-    predicted_home_spread, predicted_total_score,
-    p05_score_diff, p95_score_diff,
-    p05_total_score, p95_total_score,
-    market_implied_home_prob, market_implied_away_prob,
-    market_odds, simulated_at
-) VALUES
-    -- Dodgers at Yankees: Pre-match forecast
-    ('c0000000-0000-0000-0000-000000000001', 'b0000000-0000-0000-0000-000000000001', 'a0000000-0000-0000-0000-000000000001', 50003,
-     0.4680, 0.5320, -0.65, 8.42, -5.00, 4.00, 4.00, 14.00, 0.5122, 0.4878,
-     '{"bookmaker": "Consensus", "home_moneyline": -105, "away_moneyline": -115, "total_line": 8.5}'::jsonb, '2024-10-30T17:00:00Z'),
-    -- Michigan vs Washington CFP
-    ('c0000000-0000-0000-0000-000000000002', 'b0000000-0000-0000-0000-000000000002', 'a0000000-0000-0000-0000-000000000002', 50003,
-     0.6840, 0.3160, 5.85, 54.20, -7.00, 19.00, 38.00, 72.00, 0.6350, 0.3650,
-     '{"bookmaker": "Consensus", "spread_line": -4.5, "home_moneyline": -195, "away_moneyline": +165, "total_line": 55.5}'::jsonb, '2024-01-08T15:00:00Z'),
-    -- Chiefs vs 49ers Super Bowl LVIII
-    ('c0000000-0000-0000-0000-000000000003', 'b0000000-0000-0000-0000-000000000003', 'a0000000-0000-0000-0000-000000000003', 50003,
-     0.5280, 0.4720, 1.25, 47.10, -13.00, 16.00, 31.00, 64.00, 0.4800, 0.5200,
-     '{"bookmaker": "Consensus", "spread_line": +2.0, "home_moneyline": +110, "away_moneyline": -130, "total_line": 47.5}'::jsonb, '2024-02-11T12:00:00Z'),
-    -- Roland Garros Final Alcaraz vs Zverev
-    ('c0000000-0000-0000-0000-000000000004', 'b0000000-0000-0000-0000-000000000004', 'a0000000-0000-0000-0000-000000000004', 50003,
-     0.7150, 0.2850, 0.95, 38.40, -1.00, 2.00, 28.00, 48.00, 0.6720, 0.3280,
-     '{"bookmaker": "Consensus", "home_moneyline": -260, "away_moneyline": +215, "total_games_line": 38.5}'::jsonb, '2024-06-09T10:00:00Z'),
-    -- Braves vs Phillies (Upcoming)
-    ('c0000000-0000-0000-0000-000000000005', 'b0000000-0000-0000-0000-000000000005', 'a0000000-0000-0000-0000-000000000001', 50003,
-     0.5540, 0.4460, 0.68, 7.80, -4.00, 5.00, 3.00, 13.00, 0.5238, 0.4762,
-     '{"bookmaker": "The Odds API", "home_moneyline": -120, "away_moneyline": +102, "total_line": 8.0}'::jsonb, '2025-04-18T12:00:00Z'),
-    -- Georgia vs Alabama (Upcoming)
-    ('c0000000-0000-0000-0000-000000000006', 'b0000000-0000-0000-0000-000000000006', 'a0000000-0000-0000-0000-000000000002', 50003,
-     0.5920, 0.4080, 3.40, 51.60, -10.00, 17.00, 34.00, 68.00, 0.5455, 0.4545,
-     '{"bookmaker": "The Odds API", "spread_line": -2.5, "home_moneyline": -135, "away_moneyline": +115, "total_line": 52.0}'::jsonb, '2025-09-27T12:00:00Z'),
-    -- Chiefs vs Ravens (Upcoming)
-    ('c0000000-0000-0000-0000-000000000007', 'b0000000-0000-0000-0000-000000000007', 'a0000000-0000-0000-0000-000000000003', 50003,
-     0.5620, 0.4380, 2.80, 46.50, -11.00, 16.00, 30.00, 62.00, 0.5200, 0.4800,
-     '{"bookmaker": "The Odds API", "spread_line": -1.5, "home_moneyline": -120, "away_moneyline": +100, "total_line": 46.5}'::jsonb, '2025-09-04T14:00:00Z'),
-    -- Sinner vs Alcaraz Tennis (Upcoming)
-    ('c0000000-0000-0000-0000-000000000008', 'b0000000-0000-0000-0000-000000000008', 'a0000000-0000-0000-0000-000000000004', 50003,
-     0.4880, 0.5120, -0.15, 23.50, -1.00, 1.00, 19.00, 28.00, 0.4900, 0.5100,
-     '{"bookmaker": "The Odds API", "home_moneyline": +102, "away_moneyline": -122, "total_games_line": 23.5}'::jsonb, '2025-05-18T10:00:00Z')
-ON CONFLICT (id) DO UPDATE SET
-    home_win_probability = EXCLUDED.home_win_probability,
-    away_win_probability = EXCLUDED.away_win_probability,
-    predicted_home_spread = EXCLUDED.predicted_home_spread,
-    predicted_total_score = EXCLUDED.predicted_total_score;
-
--- Factual Post-Mortem Records (Strictly calculated on completed events)
-INSERT INTO factual_post_mortem (
-    id, event_id, prediction_id, framework_id,
-    predicted_home_win_prob, actual_home_outcome, brier_score,
-    actual_margin, actual_total, spread_absolute_error, total_absolute_error,
-    calibration_delta, within_p05_p95_interval, empirical_notes, evaluated_at
-) VALUES
-    -- Dodgers @ Yankees G5: Home Yankees lost 6-7 (Outcome = 0.0). Pred prob was 0.4680. Brier = (0.4680 - 0)^2 = 0.219024
-    ('d0000000-0000-0000-0000-000000000001', 'b0000000-0000-0000-0000-000000000001', 'c0000000-0000-0000-0000-000000000001', 'a0000000-0000-0000-0000-000000000001',
-     0.4680, 0.0, 0.219024, -1, 13, 0.35, 4.58, 0.034814, true,
-     'World Series G5: NYY 6, LAD 7. Empirical Brier: 0.219024. Spread error: 0.35 runs (actual -1 vs pred -0.65). Result fell cleanly inside 90% MC confidence interval [-5.0, 4.0].', '2024-10-31T01:15:00Z'),
-    -- Michigan vs Washington: Michigan won 34-13 (Outcome = 1.0). Pred prob was 0.6840. Brier = (0.6840 - 1.0)^2 = 0.099856
-    ('d0000000-0000-0000-0000-000000000002', 'b0000000-0000-0000-0000-000000000002', 'c0000000-0000-0000-0000-000000000002', 'a0000000-0000-0000-0000-000000000002',
-     0.6840, 1.0, 0.099856, 21, 47, 15.15, 7.20, -0.098594, false,
-     'CFP National Championship: MICH 34, WASH 13. Strong calibration: Brier 0.099856. Michigan ground EPA dominated Washington front 7.', '2024-01-09T02:00:00Z'),
-    -- Chiefs vs 49ers: Chiefs won 25-22 in OT (Outcome = 1.0). Pred prob was 0.5280. Brier = (0.5280 - 1.0)^2 = 0.222784
-    ('d0000000-0000-0000-0000-000000000003', 'b0000000-0000-0000-0000-000000000003', 'c0000000-0000-0000-0000-000000000003', 'a0000000-0000-0000-0000-000000000003',
-     0.5280, 1.0, 0.222784, 3, 47, 1.75, 0.10, 0.051584, true,
-     'Super Bowl LVIII: KC 25, SF 22. Actual margin: +3 (pred: +1.25). Total score: 47 (pred: 47.10, delta: 0.10). Brier score: 0.222784. Captured within 90% MC interval [-13, 16].', '2024-02-12T04:10:00Z'),
-    -- Roland Garros Final: Alcaraz won 3-2 sets (Outcome = 1.0). Pred prob was 0.7150. Brier = (0.7150 - 1.0)^2 = 0.081225
-    ('d0000000-0000-0000-0000-000000000004', 'b0000000-0000-0000-0000-000000000004', 'c0000000-0000-0000-0000-000000000004', 'a0000000-0000-0000-0000-000000000004',
-     0.7150, 1.0, 0.081225, 1, 5, 0.05, 1.20, -0.081575, true,
-     'Roland Garros Final: Alcaraz 3, Zverev 2 sets. Superior calibration: Brier 0.081225 confirms clay surface Elo weighting accuracy.', '2024-06-09T18:45:00Z')
-ON CONFLICT (id) DO UPDATE SET
-    brier_score = EXCLUDED.brier_score,
-    actual_home_outcome = EXCLUDED.actual_home_outcome;
-
--- Autonomous Upgrades Audit Log
-INSERT INTO autonomous_upgrades (
-    id, framework_id, post_mortem_id, action_type,
-    previous_weights, adjusted_weights, brier_delta, applied_ewma_step, calibration_notes, created_at
-) VALUES
-    ('e0000000-0000-0000-0000-000000000001', 'a0000000-0000-0000-0000-000000000001', 'd0000000-0000-0000-0000-000000000001', 'ewma_reweight',
-     '{"baseruns_weight": 0.58, "fip_pitcher_weight": 0.32, "bullpen_leverage_weight": 0.10, "calibration_confidence": 0.81}'::jsonb,
-     '{"baseruns_weight": 0.58, "fip_pitcher_weight": 0.32, "bullpen_leverage_weight": 0.10, "calibration_confidence": 0.82}'::jsonb,
-     0.034814, 0.0500, 'Nominal post-mortem calibration for World Series G5. EWMA updated running Brier to 0.184210.', '2024-10-31T01:16:00Z'),
-    ('e0000000-0000-0000-0000-000000000002', 'a0000000-0000-0000-0000-000000000002', 'd0000000-0000-0000-0000-000000000002', 'ewma_reweight',
-     '{"offense_epa_weight": 0.45, "defense_epa_weight": 0.35, "havoc_differential_weight": 0.15, "calibration_confidence": 0.77}'::jsonb,
-     '{"offense_epa_weight": 0.45, "defense_epa_weight": 0.35, "havoc_differential_weight": 0.15, "calibration_confidence": 0.79}'::jsonb,
-     -0.098594, 0.0600, 'Strong predictive alignment on CFP Championship. Brier score 0.099856 improved cumulative calibration metric.', '2024-01-09T02:01:00Z'),
-    ('e0000000-0000-0000-0000-000000000003', 'a0000000-0000-0000-0000-000000000004', 'd0000000-0000-0000-0000-000000000004', 'ewma_reweight',
-     '{"surface_elo_weight": 0.65, "serve_dominance_weight": 0.20, "calibration_confidence": 0.86}'::jsonb,
-     '{"surface_elo_weight": 0.65, "serve_dominance_weight": 0.20, "calibration_confidence": 0.88}'::jsonb,
-     -0.081575, 0.0500, 'Roland Garros Final post-mortem calibration. Clay surface Elo weighting reinforced.', '2024-06-09T18:46:00Z')
-ON CONFLICT (id) DO NOTHING;
 
 -- End of BATCH 1: Supabase Database Infrastructure

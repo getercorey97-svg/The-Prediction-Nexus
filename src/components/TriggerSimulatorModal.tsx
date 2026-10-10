@@ -27,10 +27,10 @@ export const TriggerSimulatorModal: React.FC<TriggerSimulatorModalProps> = ({
   selectedEventId,
   onExecuteTrigger,
 }) => {
-  const scheduledEvents = events.filter((e) => e.status === 'scheduled');
+  const pendingEvents = events.filter((e) => e.status !== 'completed');
 
   const [activeEventId, setActiveEventId] = useState<string>(
-    selectedEventId || (scheduledEvents.length > 0 ? scheduledEvents[0].id : '')
+    selectedEventId || (pendingEvents.length > 0 ? pendingEvents[0].id : '')
   );
   const [homeScore, setHomeScore] = useState<number>(5);
   const [awayScore, setAwayScore] = useState<number>(3);
@@ -91,16 +91,16 @@ export const TriggerSimulatorModal: React.FC<TriggerSimulatorModalProps> = ({
 
         {/* Modal Body */}
         <div className="p-6 space-y-5">
-          {scheduledEvents.length === 0 ? (
+          {pendingEvents.length === 0 ? (
             <div className="p-4 bg-amber-500/10 border border-amber-500/20 rounded text-amber-300 text-xs">
-              All sporting events have already been completed and post-mortems verified. Reset the database to run more trigger tests.
+              All sporting events have already been completed and post-mortems verified. Reset or refresh the database to run more trigger tests.
             </div>
           ) : (
             <form onSubmit={handleRunTrigger} className="space-y-4">
               {/* Event Selector */}
               <div>
                 <label className="block text-xs font-medium text-slate-300 mb-1.5">
-                  Select Pending Scheduled Event
+                  Select Active / Scheduled Event
                 </label>
                 <select
                   value={activeEventId}
@@ -110,9 +110,9 @@ export const TriggerSimulatorModal: React.FC<TriggerSimulatorModalProps> = ({
                   }}
                   className="w-full bg-[#080c14] border border-white/[0.1] rounded px-3 py-2 text-xs font-mono text-white focus:outline-none focus:border-emerald-500"
                 >
-                  {scheduledEvents.map((ev) => (
+                  {pendingEvents.map((ev) => (
                     <option key={ev.id} value={ev.id}>
-                      [{ev.sport.toUpperCase()}] {ev.home_participant} vs {ev.away_participant} ({ev.external_id})
+                      [{ev.sport.toUpperCase()}] {ev.home_participant} vs {ev.away_participant} ({ev.status.toUpperCase()})
                     </option>
                   ))}
                 </select>

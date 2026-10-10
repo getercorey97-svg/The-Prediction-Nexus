@@ -37,6 +37,7 @@ export interface SportingEvent {
   home_score: number | null;
   away_score: number | null;
   actual_winner: string | null;
+  market_odds?: Record<string, any>;
   official_metadata: Record<string, any>;
   created_at: string;
   updated_at: string;
@@ -53,10 +54,13 @@ export interface MonteCarloPrediction {
   predicted_total_score: number;
   p05_score_diff: number;
   p95_score_diff: number;
-  p05_total_score: number;
-  p95_total_score: number;
+  p05_total_score?: number;
+  p95_total_score?: number;
   market_implied_home_prob: number | null;
-  market_implied_away_prob: number | null;
+  market_implied_away_prob?: number | null;
+  edge_detected?: number | null;
+  kelly_criterion_fraction?: number | null;
+  distribution_histogram?: { bucket: string; count: number; percentage: number }[];
   market_odds: {
     bookmaker?: string;
     spread_line?: number;
@@ -65,7 +69,7 @@ export interface MonteCarloPrediction {
     total_line?: number;
     total_games_line?: number;
   };
-  simulated_at: string;
+  simulated_at?: string;
   created_at: string;
 }
 

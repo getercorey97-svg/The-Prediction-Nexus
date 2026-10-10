@@ -139,6 +139,38 @@ export const SimulationLabView: React.FC<SimulationLabViewProps> = ({ events }) 
             </div>
           </div>
 
+          {/* Quick-load from Live Slate */}
+          {events.filter((e) => e.sport === selectedSport).length > 0 && (
+            <div>
+              <label className="block text-[11px] font-mono text-emerald-400 mb-1">
+                Load Active Live Scraped Fixture ({events.filter((e) => e.sport === selectedSport).length} Available)
+              </label>
+              <select
+                onChange={(e) => {
+                  const ev = events.find((item) => item.id === e.target.value);
+                  if (ev) {
+                    setHomeParticipant(ev.home_participant);
+                    setAwayParticipant(ev.away_participant);
+                    const odds = ev.market_odds as any;
+                    if (odds?.home_moneyline) {
+                      setMarketMoneyline(Number(odds.home_moneyline));
+                    }
+                  }
+                }}
+                className="w-full bg-[#080c14] border border-emerald-500/30 rounded px-2.5 py-1.5 text-xs text-slate-200 font-mono focus:outline-none focus:border-emerald-400"
+              >
+                <option value="">-- Choose Live Empirical Matchup --</option>
+                {events
+                  .filter((e) => e.sport === selectedSport)
+                  .map((ev) => (
+                    <option key={ev.id} value={ev.id}>
+                      {ev.home_participant} vs {ev.away_participant} ({ev.status.toUpperCase()})
+                    </option>
+                  ))}
+              </select>
+            </div>
+          )}
+
           {/* Matchup Participants */}
           <div className="space-y-3">
             <div>

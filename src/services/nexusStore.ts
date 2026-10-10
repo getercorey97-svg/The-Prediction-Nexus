@@ -19,6 +19,9 @@ import {
   INITIAL_POST_MORTEMS,
   INITIAL_UPGRADES,
 } from '../data/seedData';
+import { fetchLiveEventsApi, triggerLiveIngestApi, runSimulationApi } from './apiConfig';
+import { runVectorizedMonteCarlo } from './simulationEngine';
+import { getSupabaseClient, isSupabaseConfigured } from './supabaseClient';
 
 type Listener = () => void;
 
@@ -30,9 +33,12 @@ class NexusDatabaseStore {
   private upgrades: AutonomousUpgrade[] = JSON.parse(JSON.stringify(INITIAL_UPGRADES));
   private realtimeLogs: RealtimeMessage[] = [];
   private listeners: Set<Listener> = new Set();
+  private isLoadingLive: boolean = false;
 
   constructor() {
-    this.addRealtimeLog('system', 'INSERT', 'Nexus database initialized with Batch 1 schema and verified historical seed records.');
+    this.addRealtimeLog('system', 'INSERT', 'Nexus database initialized. Connecting to 3-Tier Live Multi-Scraper...');
+    // Initial live hydration
+    this.fetchLiveSlate();
   }
 
   public subscribe(listener: Listener): () => void {
@@ -68,7 +74,11 @@ class NexusDatabaseStore {
     return [...this.realtimeLogs];
   }
 
-  private addRealtimeLog(table: string, eventType: 'INSERT' | 'UPDATE' | 'DELETE', summary: string) {
+  public isLiveLoading(): boolean {
+    return this.isLoadingLive;
+  }
+
+  public addRealtimeLog(table: string, eventType: 'INSERT' | 'UPDATE' | 'DELETE', summary: string) {
     const log: RealtimeMessage = {
       id: Math.random().toString(36).substring(2, 9),
       timestamp: new Date().toISOString(),
@@ -83,9 +93,149 @@ class NexusDatabaseStore {
   }
 
   /**
-   * Executes the exact PostgreSQL trigger sequence:
-   * 1. trg_event_completed_post_mortem -> fn_evaluate_event_post_mortem()
-   * 2. trg_post_mortem_autonomous_upgrade -> fn_trigger_autonomous_model_upgrade()
+   * Fetches live sporting fixtures from the 3-Tier Multi-Scraper via FastAPI gateway
+   * or directly from Supabase, enriching with Monte Carlo simulations.
+   */
+  public async fetchLiveSlate(sport?: string): Promise<void> {
+    this.isLoadingLive = true;
+    this.notify();
+
+    try {
+      // 1. Try FastAPI live events endpoint
+      let liveEvents: any[] = await fetchLiveEventsApi(sport);
+
+      // 2. If API unreachable or empty, query Supabase sporting_events table
+      if ((!liveEvents || liveEvents.length === 0) && isSupabaseConfigured()) {
+        const client = getSupabaseClient();
+        if (client) {
+          const query = client.from('sporting_events').select('*').order('event_date', { ascending: true });
+          if (sport) {
+            query.eq('sport', sport.toLowerCase());
+          }
+          const { data, error } = await query;
+          if (!error && data && data.length > 0) {
+            liveEvents = data;
+          }
+        }
+      }
+
+      if (liveEvents && liveEvents.length > 0) {
+        // Merge into local event registry by external_id (non-destructive)
+        for (const raw of liveEvents) {
+          const eventId = raw.id || `ev_${raw.external_id || Math.random().toString(36).substring(2, 9)}`;
+          const existingIdx = this.events.findIndex(
+            (e) => e.external_id === raw.external_id || e.id === raw.id
+          );
+
+          const normalizedEvent: SportingEvent = {
+            id: existingIdx !== -1 ? this.events[existingIdx].id : eventId,
+            sport: raw.sport,
+            external_id: raw.external_id,
+            event_date: raw.event_date || new Date().toISOString(),
+            home_participant: raw.home_participant,
+            away_participant: raw.away_participant,
+            surface: raw.surface || null,
+            venue: raw.venue || 'Stadium / Court',
+            status: raw.status || 'scheduled',
+            home_score: raw.home_score ?? null,
+            away_score: raw.away_score ?? null,
+            actual_winner: raw.actual_winner ?? null,
+            official_metadata: raw.official_metadata || {},
+            created_at: raw.created_at || new Date().toISOString(),
+            updated_at: raw.updated_at || new Date().toISOString(),
+          };
+
+          if (existingIdx !== -1) {
+            this.events[existingIdx] = {
+              ...this.events[existingIdx],
+              ...normalizedEvent,
+              // Preserve simulated status if local is completed
+              status: this.events[existingIdx].status === 'completed' ? 'completed' : normalizedEvent.status,
+            };
+          } else {
+            this.events.push(normalizedEvent);
+          }
+
+          // Ensure Monte Carlo prediction exists for this event
+          this.ensurePredictionForEvent(normalizedEvent, raw.market_odds, raw.model_params);
+        }
+
+        this.addRealtimeLog(
+          'sporting_events',
+          'INSERT',
+          `Hydrated ${liveEvents.length} live sporting events from 3-Tier Multi-Scraper pipeline.`
+        );
+      }
+    } catch (err) {
+      console.error('[NexusStore] Failed to hydrate live events:', err);
+    } finally {
+      this.isLoadingLive = false;
+      this.notify();
+    }
+  }
+
+  /**
+   * Generates or attaches a 50,003 Monte Carlo prediction for a sporting event.
+   */
+  public ensurePredictionForEvent(
+    event: SportingEvent,
+    marketOdds?: Record<string, any>,
+    modelParams?: Record<string, any>
+  ): MonteCarloPrediction {
+    const existing = this.predictions.find((p) => p.event_id === event.id);
+    if (existing) {
+      return existing;
+    }
+
+    const framework = this.frameworks.find((f) => f.sport === event.sport) || this.frameworks[0];
+    const odds = marketOdds || { bookmaker: 'Consensus', home_moneyline: -110, away_moneyline: -110, total_line: 8.5 };
+
+    // Run client vectorized 50,003 simulation
+    const simResult = runVectorizedMonteCarlo({
+      eventId: event.id,
+      sport: event.sport,
+      homeParticipant: event.home_participant,
+      awayParticipant: event.away_participant,
+      surface: event.surface || undefined,
+      modelParams: modelParams || (event.official_metadata as any)?.environmental ? { weather: (event.official_metadata as any)?.environmental } : {},
+      marketOdds: odds,
+    });
+
+    const predictionId = `pred_${event.id.replace(/[^a-zA-Z0-9]/g, '_')}`;
+    const prediction: MonteCarloPrediction = {
+      id: predictionId,
+      event_id: event.id,
+      framework_id: framework.id,
+      simulation_iterations: 50003,
+      home_win_probability: simResult.homeWinProbability,
+      away_win_probability: simResult.awayWinProbability,
+      predicted_home_spread: simResult.predictedHomeSpread,
+      predicted_total_score: simResult.predictedTotalScore,
+      p05_score_diff: simResult.p05ScoreDiff,
+      p95_score_diff: simResult.p95ScoreDiff,
+      market_implied_home_prob: simResult.marketImpliedHomeProb,
+      edge_detected: simResult.edgeDetected,
+      kelly_criterion_fraction: simResult.kellyCriterionFraction,
+      distribution_histogram: simResult.histogram,
+      market_odds: odds,
+      created_at: new Date().toISOString(),
+    };
+
+    this.predictions.unshift(prediction);
+    return prediction;
+  }
+
+  /**
+   * Triggers live ingestion on the backend gateway.
+   */
+  public async refreshLiveIngestion(sport: string = 'all'): Promise<void> {
+    this.addRealtimeLog('system', 'UPDATE', `Triggered 3-Tier Multi-Scraper pipeline refresh for: ${sport.toUpperCase()}`);
+    await triggerLiveIngestApi(sport);
+    await this.fetchLiveSlate(sport === 'all' ? undefined : sport);
+  }
+
+  /**
+   * Completes an event with official scores and triggers post-mortem Brier evaluation.
    */
   public completeEventWithScores(
     eventId: string,
@@ -116,7 +266,7 @@ class NexusDatabaseStore {
       actualWinner = event.away_participant;
     }
 
-    // Step 1: Update event record (Simulates UPDATE sporting_events)
+    // Step 1: Update event record
     const updatedEvent: SportingEvent = {
       ...event,
       status: 'completed',
@@ -132,14 +282,13 @@ class NexusDatabaseStore {
       `Match finished: ${event.home_participant} ${homeScore} vs ${event.away_participant} ${awayScore}. Winner: ${actualWinner}.`
     );
 
-    // Step 2: Trigger fn_evaluate_event_post_mortem()
-    const prediction = this.predictions.find((p) => p.event_id === eventId);
+    // Step 2: Trigger post-mortem Brier evaluation
+    let prediction = this.predictions.find((p) => p.event_id === eventId);
     if (!prediction) {
-      this.notify();
-      return { postMortem: null, upgrade: null };
+      prediction = this.ensurePredictionForEvent(updatedEvent);
     }
 
-    const frameworkIndex = this.frameworks.findIndex((f) => f.id === prediction.framework_id);
+    const frameworkIndex = this.frameworks.findIndex((f) => f.id === prediction!.framework_id);
     const framework = frameworkIndex !== -1 ? this.frameworks[frameworkIndex] : null;
 
     // Calculate Brier Score: (f_t - o_t)^2
@@ -179,7 +328,7 @@ class NexusDatabaseStore {
       `Brier Score evaluated: ${brierScore} for ${event.external_id} (${withinInterval ? 'within MC interval' : 'interval outlier'}).`
     );
 
-    // Step 3: Trigger fn_trigger_autonomous_model_upgrade()
+    // Step 3: Trigger autonomous EWMA calibration
     let newUpgrade: AutonomousUpgrade | null = null;
 
     if (framework && frameworkIndex !== -1) {
@@ -188,7 +337,6 @@ class NexusDatabaseStore {
       const prevWeights = { ...framework.parameters };
       const adjustedWeights = { ...framework.parameters };
 
-      // Rolling EWMA: B_new = alpha * B_match + (1 - alpha) * B_prev
       const prevCumulative = framework.cumulative_brier_score ?? 0.25;
       const newCumulativeBrier = Number((alpha * brierScore + (1.0 - alpha) * prevCumulative).toFixed(6));
       const brierDelta = Number((brierScore - prevCumulative).toFixed(6));
@@ -212,7 +360,6 @@ class NexusDatabaseStore {
         calibrationNotes = `Nominal post-mortem calibration. Applied EWMA step of ${(brierDelta * lr).toFixed(6)} against delta of ${brierDelta > 0 ? '+' : ''}${brierDelta}.`;
       }
 
-      // Update framework
       this.frameworks[frameworkIndex] = {
         ...framework,
         cumulative_brier_score: newCumulativeBrier,
@@ -249,13 +396,13 @@ class NexusDatabaseStore {
 
   public resetToSeed() {
     this.frameworks = JSON.parse(JSON.stringify(INITIAL_FRAMEWORKS));
-    this.events = JSON.parse(JSON.stringify(INITIAL_EVENTS));
-    this.predictions = JSON.parse(JSON.stringify(INITIAL_PREDICTIONS));
-    this.postMortems = JSON.parse(JSON.stringify(INITIAL_POST_MORTEMS));
-    this.upgrades = JSON.parse(JSON.stringify(INITIAL_UPGRADES));
+    this.events = [];
+    this.predictions = [];
+    this.postMortems = [];
+    this.upgrades = [];
     this.realtimeLogs = [];
-    this.addRealtimeLog('system', 'UPDATE', 'Nexus database state reset to initial verified empirical seed state.');
-    this.notify();
+    this.addRealtimeLog('system', 'UPDATE', 'Nexus database state reset. Refetching live slate...');
+    this.fetchLiveSlate();
   }
 }
 

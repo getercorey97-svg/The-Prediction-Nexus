@@ -337,3 +337,56 @@ export function runClientMonteCarloSimulation(
     quantumState: qState,
   };
 }
+
+export interface VectorizedMonteCarloOptions {
+  eventId: string;
+  sport: string;
+  homeParticipant: string;
+  awayParticipant: string;
+  surface?: string;
+  modelParams?: Record<string, any>;
+  marketOdds?: Record<string, any>;
+  leverageIndex?: number;
+  phaseTheta?: number;
+}
+
+export function runVectorizedMonteCarlo(opts: VectorizedMonteCarloOptions): SimulationResult {
+  const sport = opts.sport.toLowerCase().trim();
+  let homeRating = 0;
+  let awayRating = 0;
+
+  if (sport === 'mlb') {
+    homeRating = opts.modelParams?.home_baseruns ?? 4.75;
+    awayRating = opts.modelParams?.away_baseruns ?? 4.52;
+  } else if (sport === 'cfb') {
+    homeRating = opts.modelParams?.home_offense_epa ?? 0.24;
+    awayRating = opts.modelParams?.away_offense_epa ?? 0.19;
+  } else if (sport === 'nfl') {
+    homeRating = opts.modelParams?.home_pass_epa ?? 0.19;
+    awayRating = opts.modelParams?.away_pass_epa ?? 0.16;
+  } else if (sport === 'tennis') {
+    homeRating = opts.modelParams?.home_surface_elo ?? 2200;
+    awayRating = opts.modelParams?.away_surface_elo ?? 2100;
+  } else {
+    homeRating = 10;
+    awayRating = 10;
+  }
+
+  const moneyline = opts.marketOdds?.home_moneyline ? Number(opts.marketOdds.home_moneyline) : -115;
+  const leverage = opts.leverageIndex ?? 0.25;
+  const theta = opts.phaseTheta ?? 0.0;
+
+  return runClientMonteCarloSimulation(
+    opts.eventId,
+    opts.sport,
+    opts.homeParticipant,
+    opts.awayParticipant,
+    homeRating,
+    awayRating,
+    moneyline,
+    opts.surface || 'Hard',
+    leverage,
+    theta
+  );
+}
+

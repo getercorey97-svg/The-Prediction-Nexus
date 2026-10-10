@@ -4,9 +4,7 @@
  */
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
-
-const SUPABASE_URL = (import.meta as any).env?.VITE_SUPABASE_URL || '';
-const SUPABASE_ANON_KEY = (import.meta as any).env?.VITE_SUPABASE_ANON_KEY || '';
+import { SUPABASE_URL, SUPABASE_ANON_KEY } from './apiConfig';
 
 let clientInstance: SupabaseClient | null = null;
 

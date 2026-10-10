@@ -8,14 +8,15 @@ ingestion to background workers, preventing ASGI/serverless timeout crashes.
 from __future__ import annotations
 
 import logging
-from typing import Dict, Any
+from typing import Dict, Any, List
 from celery_app import celery_app
 from engine.monte_carlo import run_monte_carlo_simulation
-from ingestion.mlb import ingest_mlb_slate, get_mlb_team_baseruns
-from ingestion.cfb import ingest_cfb_slate, get_cfb_team_epa
-from ingestion.nfl import ingest_nfl_slate, get_nfl_team_epa
-from ingestion.tennis import ingest_tennis_slate, get_player_surface_elo
+from ingestion.mlb import get_mlb_team_baseruns
+from ingestion.cfb import get_cfb_team_epa
+from ingestion.nfl import get_nfl_team_epa
+from ingestion.tennis import get_player_surface_elo
 from ingestion.odds import fetch_market_odds_for_event
+from ingestion.tier_orchestrator import run_unified_ingestion_pipeline, get_live_events
 
 logger = logging.getLogger("nexus.tasks")
 
@@ -80,25 +81,16 @@ def simulate_event_mc(
 @celery_app.task(bind=True, name="tasks.sync_sport_slate")
 def sync_sport_slate(self, sport: str) -> Dict[str, Any]:
     """
-    Syncs game schedule and current empirical scores for the specified sport.
+    Syncs game schedule and current empirical scores for the specified sport
+    via the 3-Tier Multi-Scraper and Cross-Enrichment Pipeline.
     """
     sport_norm = sport.lower().strip()
-    logger.info(f"[Task {self.request.id}] Synchronizing {sport_norm} slate...")
-
-    if sport_norm == "mlb":
-        data = ingest_mlb_slate()
-    elif sport_norm == "cfb":
-        data = ingest_cfb_slate()
-    elif sport_norm == "nfl":
-        data = ingest_nfl_slate()
-    elif sport_norm == "tennis":
-        data = ingest_tennis_slate()
-    else:
-        data = []
+    logger.info(f"[Task {self.request.id}] Synchronizing {sport_norm} slate via 3-Tier Multi-Scraper...")
+    events = run_unified_ingestion_pipeline(sport_norm)
 
     return {
         "task_id": self.request.id,
         "sport": sport_norm,
-        "events_count": len(data),
-        "events": data,
+        "events_count": len(events),
+        "status": "COMPLETED",
     }
