@@ -1,0 +1,8 @@
+{
+  "name": "The Prediction Nexus",
+  "description": "Autonomous sports prediction platform covering MLB, CFB, NFL, and Tennis with 50,003 Monte Carlo simulations, Brier Score post-mortems, and autonomous model calibrations.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

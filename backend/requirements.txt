@@ -1,0 +1,23 @@
+# ==============================================================================
+# The Prediction Nexus: Backend Dependencies
+# Production-ready Python stack: FastAPI, Celery, Redis, NumPy, SciPy, Sport APIs
+# ==============================================================================
+
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+pydantic>=2.9.0
+pydantic-settings>=2.5.0
+
+# Asynchronous Task Queue & Cache
+celery[redis]>=5.4.0
+redis>=5.1.0
+
+# Vectorized Math & Quantitative Modeling
+numpy>=2.1.0
+scipy>=1.14.0
+
+# Free Sports Data Ingestion APIs
+pybaseball>=2.2.7
+requests>=2.32.0
+httpx>=0.27.0
+python-dotenv>=1.0.1

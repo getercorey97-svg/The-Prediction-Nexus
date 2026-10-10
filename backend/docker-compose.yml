@@ -1,0 +1,40 @@
+# ==============================================================================
+# The Prediction Nexus: Local Multi-Container Stack
+# Runs Redis broker, FastAPI gateway, and Celery background workers
+# ==============================================================================
+
+version: '3.8'
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: nexus_redis
+    ports:
+      - "6379:6379"
+    restart: always
+
+  api:
+    build: .
+    container_name: nexus_api
+    ports:
+      - "8000:8000"
+    environment:
+      - HOST=0.0.0.0
+      - PORT=8000
+      - REDIS_URL=redis://redis:6379/0
+      - ENVIRONMENT=development
+    depends_on:
+      - redis
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+    restart: always
+
+  celery_worker:
+    build: .
+    container_name: nexus_celery_worker
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - ENVIRONMENT=development
+    depends_on:
+      - redis
+    command: celery -A celery_app worker --loglevel=info --concurrency=4
+    restart: always
