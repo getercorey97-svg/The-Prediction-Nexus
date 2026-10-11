@@ -6,7 +6,13 @@
 // Dual-Environment configuration supporting both Vite (VITE_) and Next.js (NEXT_PUBLIC_) prefixes
 const getEnvVar = (viteKey: string, nextKey: string, fallback: string): string => {
   const metaEnv = (import.meta as any).env || {};
-  return metaEnv[viteKey] || metaEnv[nextKey] || fallback;
+  let procEnvVal = '';
+  try {
+    if (typeof process !== 'undefined' && process.env) {
+      procEnvVal = (process.env as any)[nextKey] || (process.env as any)[viteKey] || '';
+    }
+  } catch (_) {}
+  return metaEnv[viteKey] || metaEnv[nextKey] || procEnvVal || fallback;
 };
 
 export const API_BASE_URL = getEnvVar(
@@ -15,15 +21,19 @@ export const API_BASE_URL = getEnvVar(
   ''
 ).replace(/\/$/, '');
 
-export const SUPABASE_URL = getEnvVar(
-  'VITE_SUPABASE_URL',
-  'NEXT_PUBLIC_SUPABASE_URL',
+export const SUPABASE_URL = (
+  import.meta.env.NEXT_PUBLIC_SUPABASE_URL ||
+  import.meta.env.VITE_SUPABASE_URL ||
+  import.meta.env.SUPABASE_URL ||
+  (typeof process !== 'undefined' && (process.env?.NEXT_PUBLIC_SUPABASE_URL || process.env?.VITE_SUPABASE_URL || process.env?.SUPABASE_URL)) ||
   'https://aywldwdvflwcanqxxdhi.supabase.co'
 ).replace(/\/$/, '');
 
-export const SUPABASE_ANON_KEY = getEnvVar(
-  'VITE_SUPABASE_ANON_KEY',
-  'NEXT_PUBLIC_SUPABASE_ANON_KEY',
+export const SUPABASE_ANON_KEY = (
+  import.meta.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
+  import.meta.env.VITE_SUPABASE_ANON_KEY ||
+  import.meta.env.SUPABASE_ANON_KEY ||
+  (typeof process !== 'undefined' && (process.env?.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env?.VITE_SUPABASE_ANON_KEY || process.env?.SUPABASE_ANON_KEY)) ||
   'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImF5d2xkd2R2Zmx3Y2FucXh4ZGhpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Mjk0NTkyMDAsImV4cCI6MjA0NTAzNTIwMH0.placeholder'
 );
 
