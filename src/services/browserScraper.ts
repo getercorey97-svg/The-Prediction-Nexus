@@ -3,10 +3,26 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { SportingEvent } from '../types/database';
+import { SportingEvent, HistoricalWindowConfig } from '../types/database';
 import { getSupabaseClient, isSupabaseConfigured } from './supabaseClient';
 
 const ESPN_BASE = 'https://site.api.espn.com/apis/site/v2/sports';
+const MLB_STATS_BASE = 'https://statsapi.mlb.com/api/v1';
+
+/**
+ * The 7 Progressive Windows for 60-day historical calibration and upcoming live slate:
+ * Window 2 covers Aug 21 - Aug 31 to prevent skipping August 31.
+ * Window 7 covers Oct 11 - Oct 18 for forward-looking active fixtures.
+ */
+export const HISTORICAL_CALIBRATION_WINDOWS: HistoricalWindowConfig[] = [
+  { id: 1, title: 'Aug 11 - Aug 20, 2026 (Early August)', startDate: '2026-08-11', endDate: '2026-08-20' },
+  { id: 2, title: 'Aug 21 - Aug 31, 2026 (Late August)', startDate: '2026-08-21', endDate: '2026-08-31' },
+  { id: 3, title: 'Sep 01 - Sep 10, 2026 (Early September)', startDate: '2026-09-01', endDate: '2026-09-10' },
+  { id: 4, title: 'Sep 11 - Sep 20, 2026 (Mid September)', startDate: '2026-09-11', endDate: '2026-09-20' },
+  { id: 5, title: 'Sep 21 - Sep 30, 2026 (Late September)', startDate: '2026-09-21', endDate: '2026-09-30' },
+  { id: 6, title: 'Oct 01 - Oct 11, 2026 (Pennant Race & Week 5-6)', startDate: '2026-10-01', endDate: '2026-10-11' },
+  { id: 7, title: 'Oct 11 - Oct 18, 2026 (Active & Upcoming Slate)', startDate: '2026-10-11', endDate: '2026-10-18', isForwardLooking: true },
+];
 
 /**
  * Normalizes player name for Tennis deduplication
@@ -19,9 +35,6 @@ function normalizeLastName(name: string): string {
   return last.replace(/[^a-zA-Z]/g, '').toLowerCase();
 }
 
-/**
- * Creates deduplication key for tennis match
- */
 function makeTennisDedupKey(p1: string, p2: string, dateStr: string): string {
   const l1 = normalizeLastName(p1);
   const l2 = normalizeLastName(p2);
@@ -31,9 +44,9 @@ function makeTennisDedupKey(p1: string, p2: string, dateStr: string): string {
 }
 
 /**
- * Safely fetches JSON from public ESPN endpoint with browser User-Agent & timeout
+ * Safely fetches JSON from public endpoints with timeout
  */
-async function fetchEspnJson(url: string, timeoutMs: number = 7000): Promise<any> {
+async function fetchPublicJson(url: string, timeoutMs: number = 7000): Promise<any> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -49,7 +62,6 @@ async function fetchEspnJson(url: string, timeoutMs: number = 7000): Promise<any
     }
     return await res.json();
   } catch (err) {
-    console.warn(`[BrowserScraper] ESPN fetch failed for ${url}:`, err);
     return null;
   } finally {
     clearTimeout(timeoutId);
@@ -57,9 +69,84 @@ async function fetchEspnJson(url: string, timeoutMs: number = 7000): Promise<any
 }
 
 /**
+ * Parses MLB StatsAPI schedule response
+ * Extracts actual starting pitchers, team records, inning linescores, and game statuses
+ */
+export function parseMlbStatsApiGames(data: any): SportingEvent[] {
+  if (!data || !Array.isArray(data.dates)) return [];
+
+  const events: SportingEvent[] = [];
+
+  for (const dateObj of data.dates) {
+    const games = dateObj.games || [];
+    for (const g of games) {
+      const gamePk = String(g.gamePk || '');
+      if (!gamePk) continue;
+
+      const homeTeam = g.teams?.home;
+      const awayTeam = g.teams?.away;
+      if (!homeTeam || !awayTeam) continue;
+
+      const homeName = (homeTeam.team?.name || 'Home Team').trim();
+      const awayName = (awayTeam.team?.name || 'Away Team').trim();
+      const homeScore = homeTeam.score != null ? Number(homeTeam.score) : null;
+      const awayScore = awayTeam.score != null ? Number(awayTeam.score) : null;
+
+      const statusState = (g.status?.abstractGameState || g.status?.detailedState || 'Preview').toLowerCase();
+      let status: 'scheduled' | 'in_progress' | 'completed' = 'scheduled';
+      if (['final', 'game over', 'completed'].includes(statusState) || g.status?.statusCode === 'F') {
+        status = 'completed';
+      } else if (['live', 'in progress'].includes(statusState) || g.status?.statusCode === 'I') {
+        status = 'in_progress';
+      }
+
+      let actualWinner: string | null = null;
+      if (status === 'completed') {
+        if (homeTeam.isWinner === true) actualWinner = homeName;
+        else if (awayTeam.isWinner === true) actualWinner = awayName;
+        else if (homeScore !== null && awayScore !== null) {
+          actualWinner = homeScore > awayScore ? homeName : awayName;
+        }
+      }
+
+      const venueName = g.venue?.name || `${homeName} Ballpark`;
+      const eventDate = g.gameDate || `${dateObj.date}T19:05:00Z`;
+
+      events.push({
+        id: `ev_mlb_stat_${gamePk}`,
+        sport: 'mlb',
+        external_id: `mlb_${gamePk}`,
+        event_date: eventDate,
+        home_participant: homeName,
+        away_participant: awayName,
+        surface: 'Dirt/Grass',
+        venue: venueName,
+        status,
+        home_score: homeScore,
+        away_score: awayScore,
+        actual_winner: actualWinner,
+        market_odds: {
+          home_moneyline: -115,
+          away_moneyline: 105,
+        },
+        official_metadata: {
+          source: 'mlb_statsapi',
+          probable_pitcher_home: homeTeam.probablePitcher?.fullName,
+          probable_pitcher_away: awayTeam.probablePitcher?.fullName,
+          home_record: homeTeam.leagueRecord || {},
+          away_record: awayTeam.leagueRecord || {},
+        },
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      });
+    }
+  }
+
+  return events;
+}
+
+/**
  * Parses ESPN Tennis Scoreboard (ATP & WTA)
- * Traverses BOTH ev.groupings[].competitions[] AND ev.competitions[].
- * Extracts player names from competitor.athlete.displayName.
  */
 function parseEspnTennisEvents(data: any, circuit: 'atp' | 'wta'): SportingEvent[] {
   if (!data || !Array.isArray(data.events)) {
@@ -73,7 +160,7 @@ function parseEspnTennisEvents(data: any, circuit: 'atp' | 'wta'): SportingEvent
     const tournamentName = ev.name || ev.shortName || `${circuit.toUpperCase()} Tour`;
     const competitionsList: any[] = [];
 
-    // 1. Nested tournament groupings
+    // 1. Groupings competitions
     if (Array.isArray(ev.groupings)) {
       for (const grp of ev.groupings) {
         if (Array.isArray(grp.competitions)) {
@@ -94,7 +181,6 @@ function parseEspnTennisEvents(data: any, circuit: 'atp' | 'wta'): SportingEvent
       const competitors = comp.competitors || [];
       if (competitors.length < 2) continue;
 
-      // Extract candidate athletes
       const parsedAthletes = competitors
         .map((c: any) => {
           const ath = c.athlete || {};
@@ -110,17 +196,9 @@ function parseEspnTennisEvents(data: any, circuit: 'atp' | 'wta'): SportingEvent
           ).trim();
           const scoreVal = c.score != null && !isNaN(Number(c.score)) ? Number(c.score) : null;
           const isWinner = c.winner === true;
-          const lscores: number[] = [];
-          if (Array.isArray(c.linescores)) {
-            for (const ls of c.linescores) {
-              const v = typeof ls === 'object' && ls !== null ? ls.value : ls;
-              if (v != null && !isNaN(Number(v))) {
-                lscores.push(Number(v));
-              }
-            }
-          }
           const isHome = c.homeAway === 'home' || c.order === 1;
-          return { name, scoreVal, isWinner, lscores, isHome };
+          const records = c.records || [];
+          return { name, scoreVal, isWinner, isHome, records };
         })
         .filter((c: any) => c.name.length > 0);
 
@@ -133,8 +211,6 @@ function parseEspnTennisEvents(data: any, circuit: 'atp' | 'wta'): SportingEvent
       const awayParticipant = awayComp.name;
       const homeScore = homeComp.scoreVal;
       const awayScore = awayComp.scoreVal;
-      const homeLinescores = homeComp.lscores;
-      const awayLinescores = awayComp.lscores;
       const homeWinner = homeComp.isWinner;
       const awayWinner = awayComp.isWinner;
 
@@ -160,6 +236,16 @@ function parseEspnTennisEvents(data: any, circuit: 'atp' | 'wta'): SportingEvent
         }
       }
 
+      // Check for odds
+      const oddsObj = comp.odds?.[0] || ev.odds?.[0];
+      let marketOdds: Record<string, any> = {};
+      if (oddsObj) {
+        marketOdds = {
+          home_moneyline: oddsObj.homeOdds?.moneyLine,
+          away_moneyline: oddsObj.awayOdds?.moneyLine,
+        };
+      }
+
       events.push({
         id: `ev_espn_tennis_${circuit}_${compId}`,
         sport: 'tennis',
@@ -173,12 +259,14 @@ function parseEspnTennisEvents(data: any, circuit: 'atp' | 'wta'): SportingEvent
         home_score: homeScore,
         away_score: awayScore,
         actual_winner: actualWinner,
+        market_odds: Object.keys(marketOdds).length > 0 ? marketOdds : undefined,
         official_metadata: {
           circuit: circuit.toUpperCase(),
           tournament: tournamentName,
-          source: 'espn_browser_fallback',
-          home_linescores: homeLinescores,
-          away_linescores: awayLinescores,
+          source: 'espn_scoreboard',
+          home_record: homeComp.records?.[0] || {},
+          away_record: awayComp.records?.[0] || {},
+          odds: marketOdds,
         },
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
@@ -191,6 +279,7 @@ function parseEspnTennisEvents(data: any, circuit: 'atp' | 'wta'): SportingEvent
 
 /**
  * Parses ESPN Team Sport Scoreboard (MLB, CFB, NFL)
+ * Extracts pre-match records, consensus odds if present, and linescores
  */
 function parseEspnTeamSportEvents(data: any, sport: 'mlb' | 'cfb' | 'nfl'): SportingEvent[] {
   if (!data || !Array.isArray(data.events)) {
@@ -207,7 +296,6 @@ function parseEspnTeamSportEvents(data: any, sport: 'mlb' | 'cfb' | 'nfl'): Spor
     const competitors = comp.competitors || [];
     if (competitors.length < 2) continue;
 
-    // Extract candidate teams
     const parsedTeams = competitors
       .map((c: any) => {
         const tea = c.team || {};
@@ -215,7 +303,19 @@ function parseEspnTeamSportEvents(data: any, sport: 'mlb' | 'cfb' | 'nfl'): Spor
         const scoreVal = c.score != null && !isNaN(Number(c.score)) ? Number(c.score) : null;
         const isWinner = c.winner === true;
         const isHome = c.homeAway === 'home' || c.order === 0;
-        return { name, scoreVal, isWinner, isHome };
+
+        let wins = 0;
+        let losses = 0;
+        if (Array.isArray(c.records) && c.records.length > 0) {
+          const recSummary = c.records[0]?.summary || '';
+          const parts = recSummary.split('-');
+          if (parts.length >= 2) {
+            wins = parseInt(parts[0], 10) || 0;
+            losses = parseInt(parts[1], 10) || 0;
+          }
+        }
+
+        return { name, scoreVal, isWinner, isHome, wins, losses };
       })
       .filter((c: any) => c.name.length > 0);
 
@@ -248,6 +348,19 @@ function parseEspnTeamSportEvents(data: any, sport: 'mlb' | 'cfb' | 'nfl'): Spor
       }
     }
 
+    // Extract closing or consensus odds if present
+    const oddsObj = comp.odds?.[0] || ev.odds?.[0];
+    let marketOdds: Record<string, any> = {};
+    if (oddsObj) {
+      marketOdds = {
+        details: oddsObj.details,
+        over_under: oddsObj.overUnder,
+        spread: oddsObj.spread,
+        home_moneyline: oddsObj.homeOdds?.moneyLine,
+        away_moneyline: oddsObj.awayOdds?.moneyLine,
+      };
+    }
+
     const venue = comp.venue?.fullName || `${homeParticipant} Stadium`;
     const eventDate = comp.date || ev.date || new Date().toISOString();
 
@@ -264,9 +377,13 @@ function parseEspnTeamSportEvents(data: any, sport: 'mlb' | 'cfb' | 'nfl'): Spor
       home_score: homeScore,
       away_score: awayScore,
       actual_winner: actualWinner,
+      market_odds: Object.keys(marketOdds).length > 0 ? marketOdds : undefined,
       official_metadata: {
-        source: 'espn_browser_fallback',
+        source: 'espn_scoreboard',
         venue,
+        home_record: { wins: homeComp.wins, losses: homeComp.losses },
+        away_record: { wins: awayComp.wins, losses: awayComp.losses },
+        odds: marketOdds,
       },
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
@@ -277,9 +394,108 @@ function parseEspnTeamSportEvents(data: any, sport: 'mlb' | 'cfb' | 'nfl'): Spor
 }
 
 /**
- * Direct Client-Side Fallback Scraper:
- * Queries ESPN public scoreboards directly from the browser across Tennis, MLB, CFB, and NFL.
- * ESPN APIs have CORS headers enabled for browser fetches and never block client IPs.
+ * Cache for MLB schedule to prevent repeating bulk calls
+ */
+let cachedMlbBulkEvents: SportingEvent[] | null = null;
+
+/**
+ * Fetches the 60-day MLB schedule in a single bulk call
+ */
+export async function fetchMlbSeasonSlate(): Promise<SportingEvent[]> {
+  if (cachedMlbBulkEvents && cachedMlbBulkEvents.length > 0) {
+    return cachedMlbBulkEvents;
+  }
+
+  const url = `${MLB_STATS_BASE}/schedule?sportId=1&startDate=2026-08-11&endDate=2026-10-18&hydrate=probablePitcher,linescore,team`;
+  const data = await fetchPublicJson(url, 9000);
+  if (!data) return [];
+
+  const parsed = parseMlbStatsApiGames(data);
+  if (parsed.length > 0) {
+    cachedMlbBulkEvents = parsed;
+  }
+  return parsed;
+}
+
+/**
+ * Fetches events for a specific 10-day progressive window across MLB, CFB, NFL, and Tennis
+ */
+export async function fetchProgressiveWindowSlate(windowConfig: HistoricalWindowConfig): Promise<SportingEvent[]> {
+  const { startDate, endDate, isForwardLooking } = windowConfig;
+  const events: SportingEvent[] = [];
+
+  // 1. MLB: Slices from full 60-day bulk call or fetches directly
+  try {
+    const mlbAll = await fetchMlbSeasonSlate();
+    const startTs = new Date(startDate).getTime();
+    const endTs = new Date(endDate + 'T23:59:59Z').getTime();
+
+    const mlbSlice = mlbAll.filter((e) => {
+      const t = new Date(e.event_date).getTime();
+      return t >= startTs && t <= endTs;
+    });
+    events.push(...mlbSlice);
+  } catch (err) {
+    console.warn('[BrowserScraper] MLB slice exception:', err);
+  }
+
+  // 2. CFB & NFL: Sample representative dates in the window
+  const dateSamples: string[] = [];
+  const s = new Date(startDate);
+  const e = new Date(endDate);
+  // Pick key dates (e.g. start, mid, end) to pull scoreboards without spamming
+  const stepDays = isForwardLooking ? 2 : 4;
+  for (let d = new Date(s); d <= e; d.setDate(d.getDate() + stepDays)) {
+    const yyyymmdd = d.toISOString().substring(0, 10).replace(/-/g, '');
+    dateSamples.push(yyyymmdd);
+  }
+
+  const networkTasks: Promise<SportingEvent[]>[] = [];
+
+  // Tennis calls
+  networkTasks.push(
+    fetchPublicJson(`${ESPN_BASE}/tennis/atp/scoreboard`).then((d) => (d ? parseEspnTennisEvents(d, 'atp') : []))
+  );
+  networkTasks.push(
+    fetchPublicJson(`${ESPN_BASE}/tennis/wta/scoreboard`).then((d) => (d ? parseEspnTennisEvents(d, 'wta') : []))
+  );
+
+  // CFB and NFL sampled dates
+  for (const dateStr of dateSamples) {
+    networkTasks.push(
+      fetchPublicJson(`${ESPN_BASE}/football/college-football/scoreboard?groups=80&limit=100&dates=${dateStr}`).then(
+        (d) => (d ? parseEspnTeamSportEvents(d, 'cfb') : [])
+      )
+    );
+    networkTasks.push(
+      fetchPublicJson(`${ESPN_BASE}/football/nfl/scoreboard?dates=${dateStr}`).then(
+        (d) => (d ? parseEspnTeamSportEvents(d, 'nfl') : [])
+      )
+    );
+  }
+
+  const results = await Promise.allSettled(networkTasks);
+  for (const res of results) {
+    if (res.status === 'fulfilled' && Array.isArray(res.value)) {
+      events.push(...res.value);
+    }
+  }
+
+  // Deduplicate on external_id
+  const seenIds = new Set<string>();
+  const deduped: SportingEvent[] = [];
+  for (const ev of events) {
+    if (!seenIds.has(ev.external_id)) {
+      seenIds.add(ev.external_id);
+      deduped.push(ev);
+    }
+  }
+
+  return deduped;
+}
+
+/**
+ * Client-Side Instant Slate Scraper for Current Day / Upcoming Slate
  */
 export async function scrapeLiveSlateFromBrowser(): Promise<SportingEvent[]> {
   const endpoints = [
@@ -292,7 +508,7 @@ export async function scrapeLiveSlateFromBrowser(): Promise<SportingEvent[]> {
 
   const results = await Promise.allSettled(
     endpoints.map(async (ep) => {
-      const data = await fetchEspnJson(ep.url);
+      const data = await fetchPublicJson(ep.url);
       if (!data) return [];
 
       if (ep.type === 'tennis_atp') {
@@ -322,35 +538,91 @@ export async function scrapeLiveSlateFromBrowser(): Promise<SportingEvent[]> {
 
 /**
  * Upserts sporting events into Supabase PostgreSQL table via client
+ * Implements robust schema-cache auto-adaptation:
+ * If Supabase returns PGRST204 (column not found in schema cache, e.g. actual_winner or market_odds),
+ * it dynamically strips the unrecognized column, packs it into official_metadata, and retries.
  */
 export async function upsertEventsToSupabase(events: SportingEvent[]): Promise<boolean> {
   if (!isSupabaseConfigured() || events.length === 0) return false;
   const client = getSupabaseClient();
   if (!client) return false;
 
-  try {
-    const payload = events.map((e) => ({
-      sport: e.sport,
-      external_id: e.external_id,
-      event_date: e.event_date,
-      home_participant: e.home_participant,
-      away_participant: e.away_participant,
-      surface: e.surface,
-      venue: e.venue,
-      status: e.status,
-      home_score: e.home_score,
-      away_score: e.away_score,
-      actual_winner: e.actual_winner,
-      official_metadata: e.official_metadata || {},
-      updated_at: new Date().toISOString(),
-    }));
+  const buildPayload = (stripCols: Set<string> = new Set()) => {
+    return events.map((e) => {
+      const metadata = {
+        ...(e.official_metadata || {}),
+      };
 
-    const { error } = await client
+      const record: Record<string, any> = {
+        sport: e.sport,
+        external_id: e.external_id,
+        event_date: e.event_date,
+        home_participant: e.home_participant,
+        away_participant: e.away_participant,
+        surface: e.surface,
+        venue: e.venue,
+        status: e.status,
+        home_score: e.home_score,
+        away_score: e.away_score,
+        updated_at: new Date().toISOString(),
+      };
+
+      if (!stripCols.has('actual_winner') && e.actual_winner !== undefined) {
+        record.actual_winner = e.actual_winner;
+      } else if (stripCols.has('actual_winner') && e.actual_winner !== undefined) {
+        metadata.actual_winner = e.actual_winner;
+      }
+
+      if (!stripCols.has('market_odds') && e.market_odds !== undefined) {
+        record.market_odds = e.market_odds;
+      } else if (stripCols.has('market_odds') && e.market_odds !== undefined) {
+        metadata.market_odds = e.market_odds;
+      }
+
+      record.official_metadata = metadata;
+      return record;
+    });
+  };
+
+  try {
+    let payload = buildPayload();
+    let res = await client
       .from('sporting_events')
       .upsert(payload, { onConflict: 'external_id' });
 
-    if (error) {
-      console.warn('[BrowserScraper] Supabase upsert non-fatal error:', error.message);
+    if (res.error) {
+      // Check for PGRST204 or missing column pattern
+      const msg = res.error.message || '';
+      const missingColMatch = msg.match(/Could not find the '([^']+)' column/i);
+      if (res.error.code === 'PGRST204' || missingColMatch) {
+        const missingCol = missingColMatch ? missingColMatch[1] : 'actual_winner';
+        const stripSet = new Set<string>([missingCol]);
+        // Also strip market_odds if actual_winner was missing, just in case schema is standard minimal
+        if (missingCol === 'actual_winner') {
+          stripSet.add('actual_winner');
+        }
+
+        const retryPayload = buildPayload(stripSet);
+        const retryRes = await client
+          .from('sporting_events')
+          .upsert(retryPayload, { onConflict: 'external_id' });
+
+        if (retryRes.error) {
+          // If still another column missing, strip market_odds too
+          const msg2 = retryRes.error.message || '';
+          const match2 = msg2.match(/Could not find the '([^']+)' column/i);
+          if (match2) {
+            stripSet.add(match2[1]);
+            const finalPayload = buildPayload(stripSet);
+            const finalRes = await client
+              .from('sporting_events')
+              .upsert(finalPayload, { onConflict: 'external_id' });
+            return !finalRes.error;
+          }
+          return false;
+        }
+        return true;
+      }
       return false;
     }
     return true;

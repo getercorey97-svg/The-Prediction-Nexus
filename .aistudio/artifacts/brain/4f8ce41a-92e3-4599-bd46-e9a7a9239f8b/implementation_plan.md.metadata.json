@@ -1,6 +1,6 @@
 {
-  "summary":  "Comprehensive architectural plan for purging all static 2024-2025 mock data and establishing an autonomous 3-Tier Live Multi-Scraper and Cross-Enrichment Pipeline (ESPN hidden API, MLB StatsAPI/Yahoo/SofaScore, Open-Meteo weather), with automated FastAPI lifespan startup ingestion and Supabase live binding.",
-  "updatedAt":  "2026-10-10T07:33:34.094332162Z",
+  "summary":  "Revised implementation plan incorporating four verification hardening edge cases: August 31 leapfix & 7th forward-looking window (Oct 11-18), zero look-ahead bias record adjustment on completed games, transparent empirical prior baseline for archived events with stripped ESPN odds, and Vercel/Vite configuration hardening.",
+  "updatedAt":  "2026-10-11T23:16:47.626725618Z",
   "requestFeedback":  true,
   "userFacing":  true
 }

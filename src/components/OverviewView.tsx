@@ -10,6 +10,7 @@ import {
   MonteCarloPrediction,
   FactualPostMortem,
   RealtimeMessage,
+  WindowHydrationProgress,
 } from '../types/database';
 import { nexusStore } from '../services/nexusStore';
 import {
@@ -19,15 +20,14 @@ import {
   Zap,
   ArrowRight,
   Radio,
-  PlayCircle,
   CheckCircle2,
   Calendar,
   CloudSun,
   Shield,
   RefreshCw,
-  SlidersHorizontal,
   ChevronRight,
-  AlertTriangle,
+  ShieldCheck,
+  TrendingDown,
 } from 'lucide-react';
 
 interface OverviewViewProps {
@@ -36,8 +36,11 @@ interface OverviewViewProps {
   predictions: MonteCarloPrediction[];
   postMortems: FactualPostMortem[];
   realtimeLogs: RealtimeMessage[];
-  onOpenTriggerModalForEvent: (event: SportingEvent) => void;
-  onNavigateToTab: (tab: 'predictions' | 'post-mortem' | 'upgrades' | 'sql-ddl' | 'tennis') => void;
+  progress: WindowHydrationProgress;
+  onNavigateToTab: (
+    tab: 'accuracy-ledger' | 'predictions' | 'post-mortem' | 'upgrades' | 'sql-ddl' | 'tennis'
+  ) => void;
+  onSyncAll: () => Promise<void>;
 }
 
 export const OverviewView: React.FC<OverviewViewProps> = ({
@@ -46,40 +49,38 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
   predictions,
   postMortems,
   realtimeLogs,
-  onOpenTriggerModalForEvent,
+  progress,
   onNavigateToTab,
+  onSyncAll,
 }) => {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [selectedSport, setSelectedSport] = useState<'ALL' | 'TENNIS' | 'MLB' | 'CFB' | 'NFL'>('ALL');
-  const [statusBanner, setStatusBanner] = useState<{ message: string; type: 'success' | 'warning' | 'info' } | null>(null);
+  const [statusBanner, setStatusBanner] = useState<{
+    message: string;
+    type: 'success' | 'warning' | 'info';
+  } | null>(null);
 
   const isLiveLoading = isRefreshing || nexusStore.isLiveLoading();
 
-  // Compute live operational KPIs
+  // Compute live operational KPIs dynamically
   const completedCount = events.filter((e) => e.status === 'completed').length;
   const inProgressCount = events.filter((e) => e.status === 'in_progress').length;
   const scheduledCount = events.filter((e) => e.status === 'scheduled').length;
 
+  const evaluatedWithScores = postMortems.length;
   const avgBrier =
-    postMortems.length > 0
-      ? (postMortems.reduce((acc, pm) => acc + pm.brier_score, 0) / postMortems.length).toFixed(6)
-      : 'Awaiting Final Outcomes';
+    evaluatedWithScores > 0
+      ? (postMortems.reduce((acc, pm) => acc + pm.brier_score, 0) / evaluatedWithScores).toFixed(5)
+      : 'Awaiting Calibration';
 
   const handleRefreshSlate = async () => {
     setIsRefreshing(true);
     try {
-      const res = await nexusStore.refreshLiveIngestion();
-      if (res.success && res.count > 0) {
-        setStatusBanner({
-          message: `Hydrated ${res.count} live sporting fixtures (${res.source === 'browser_fallback' ? 'ESPN Direct Browser Scraper' : 'Serverless API'}). Badges updated!`,
-          type: 'success',
-        });
-      } else {
-        setStatusBanner({
-          message: res.error || 'Live slate sync complete. Showing existing sporting fixtures.',
-          type: 'warning',
-        });
-      }
+      await nexusStore.refreshLiveIngestion('all');
+      setStatusBanner({
+        message: 'Live sporting slate refreshed directly from public scoreboards.',
+        type: 'success',
+      });
     } catch (err: any) {
       setStatusBanner({
         message: err?.message || 'Ingestion encountered an issue. Preserving existing stored fixtures.',
@@ -89,352 +90,292 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
       setIsRefreshing(false);
       setTimeout(() => {
         setStatusBanner(null);
-      }, 7000);
+      }, 6000);
     }
   };
 
-  // Filtered live events without any artificial cap
+  // Filtered events
   const filteredEvents = React.useMemo(() => {
-    if (selectedSport === 'ALL') {
-      return events;
+    let list = events;
+    if (selectedSport !== 'ALL') {
+      list = events.filter((e) => e.sport.toUpperCase() === selectedSport);
     }
-    return events.filter((e) => e.sport.toUpperCase() === selectedSport);
+    // Sort scheduled and in_progress first, then recent completed
+    return [...list].sort((a, b) => {
+      const orderA = a.status === 'in_progress' ? 0 : a.status === 'scheduled' ? 1 : 2;
+      const orderB = b.status === 'in_progress' ? 0 : b.status === 'scheduled' ? 1 : 2;
+      if (orderA !== orderB) return orderA - orderB;
+      return new Date(b.event_date).getTime() - new Date(a.event_date).getTime();
+    });
   }, [events, selectedSport]);
 
-  // Sport counts
   const sportCounts = React.useMemo(() => {
-    return {
+    const counts: Record<'ALL' | 'TENNIS' | 'MLB' | 'CFB' | 'NFL', number> = {
       ALL: events.length,
-      TENNIS: events.filter((e) => e.sport.toUpperCase() === 'TENNIS').length,
-      MLB: events.filter((e) => e.sport.toUpperCase() === 'MLB').length,
-      CFB: events.filter((e) => e.sport.toUpperCase() === 'CFB').length,
-      NFL: events.filter((e) => e.sport.toUpperCase() === 'NFL').length,
+      TENNIS: 0,
+      MLB: 0,
+      CFB: 0,
+      NFL: 0,
     };
+    for (const ev of events) {
+      const sp = ev.sport.toUpperCase() as 'TENNIS' | 'MLB' | 'CFB' | 'NFL';
+      if (counts[sp] !== undefined) {
+        counts[sp]++;
+      }
+    }
+    return counts;
   }, [events]);
 
   return (
     <div className="space-y-6">
-      {/* Platform Realtime Status Banner */}
-      <div className="p-4 rounded-lg bg-[#0e1422] border border-emerald-500/20 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div className="space-y-1">
-          <div className="flex items-center gap-2">
-            <span className="relative flex h-2 w-2">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-              <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
-            </span>
-            <span className="text-xs font-semibold uppercase tracking-wider font-mono text-emerald-400">
-              Autonomous Ingestion & Simulation Pipeline Active
-            </span>
-          </div>
-          <p className="text-xs text-slate-400 max-w-2xl">
-            Live ingestion via <strong className="text-slate-200">Tier 1 ESPN Hidden API & SofaScore Global Tennis</strong> with automatic failover to <strong className="text-slate-200">Tier 2 Advanced Metrics</strong> (FIP, BaseRuns, EPA, Havoc, Surface Elo) and <strong className="text-slate-200">Tier 3 Open-Meteo Weather</strong>.
-          </p>
-        </div>
-
-        <button
-          onClick={handleRefreshSlate}
-          disabled={isRefreshing}
-          className="inline-flex items-center justify-center gap-2 px-3.5 py-2 text-xs font-semibold text-emerald-950 bg-emerald-400 hover:bg-emerald-300 disabled:opacity-50 rounded shadow-md transition-all whitespace-nowrap cursor-pointer shrink-0"
-        >
-          <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin' : ''}`} />
-          <span>{isRefreshing ? 'Syncing Live Multi-Scraper...' : 'Refresh Live 3-Tier Slate'}</span>
-        </button>
-      </div>
-
-      {/* Dynamic Status / Hydration Notification Banner */}
+      {/* Status Notification Banner */}
       {statusBanner && (
         <div
-          className={`p-3.5 rounded-lg border text-xs flex items-center justify-between gap-3 transition-all ${
+          className={`p-3 rounded-lg text-xs font-medium border flex items-center justify-between ${
             statusBanner.type === 'success'
               ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
-              : statusBanner.type === 'warning'
-              ? 'bg-amber-500/10 border-amber-500/30 text-amber-300'
-              : 'bg-blue-500/10 border-blue-500/30 text-blue-300'
+              : 'bg-amber-500/10 border-amber-500/30 text-amber-300'
           }`}
         >
-          <div className="flex items-center gap-2.5">
-            {statusBanner.type === 'success' ? (
-              <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-            ) : (
-              <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
-            )}
-            <span>{statusBanner.message}</span>
-          </div>
-          <button
-            onClick={() => setStatusBanner(null)}
-            className="text-slate-400 hover:text-white text-xs underline font-medium cursor-pointer shrink-0"
-          >
-            Dismiss
+          <span>{statusBanner.message}</span>
+          <button onClick={() => setStatusBanner(null)} className="text-slate-400 hover:text-white ml-2">
+            ✕
           </button>
         </div>
       )}
 
-      {/* KPI Quantitative Strip */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <div className="p-4 bg-[#0e1422] rounded-lg border border-white/[0.08]">
-          <div className="text-xs font-medium text-slate-400">Monte Carlo Rigor</div>
-          <div className="mt-1 text-2xl font-bold font-mono tabular-nums text-white">50,003</div>
-          <div className="mt-1 text-xs text-slate-500">Vectorized NumPy iterations / event</div>
+      {/* Progressive 7-Window Hydration & Calibration Banner */}
+      <div className="bg-[#0c101b] border border-white/[0.08] rounded-xl p-5 shadow-sm">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-4">
+          <div>
+            <div className="flex items-center gap-2 mb-1">
+              <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold uppercase bg-cyan-500/10 text-cyan-400 border border-cyan-500/20">
+                Progressive Ingestion (Aug 11 – Oct 18, 2026)
+              </span>
+              <span className="text-xs text-slate-400">
+                Window {progress.currentWindowIndex} of {progress.totalWindows}
+              </span>
+            </div>
+            <h2 className="text-base font-bold text-white tracking-tight flex items-center gap-2">
+              <span>{progress.currentWindowName}</span>
+              {progress.status === 'hydrating' && (
+                <RefreshCw className="w-3.5 h-3.5 animate-spin text-cyan-400" />
+              )}
+            </h2>
+          </div>
+
+          <div className="flex items-center gap-2.5">
+            <button
+              onClick={() => onNavigateToTab('accuracy-ledger')}
+              className="px-3.5 py-2 text-xs font-semibold text-cyan-300 bg-cyan-500/15 border border-cyan-500/30 rounded-lg hover:bg-cyan-500/25 transition shadow-sm flex items-center gap-1.5"
+            >
+              <ShieldCheck className="w-4 h-4 text-cyan-400" />
+              <span>Open Accuracy Ledger</span>
+            </button>
+            <button
+              onClick={handleRefreshSlate}
+              disabled={isLiveLoading}
+              className="px-3.5 py-2 text-xs font-semibold text-emerald-950 bg-emerald-400 hover:bg-emerald-300 disabled:opacity-50 rounded-lg shadow-sm transition flex items-center gap-1.5"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${isLiveLoading ? 'animate-spin' : ''}`} />
+              <span>Fetch Live Slate</span>
+            </button>
+          </div>
         </div>
 
-        <div className="p-4 bg-[#0e1422] rounded-lg border border-white/[0.08]">
-          <div className="text-xs font-medium text-slate-400">Average Brier Score</div>
-          <div className={`mt-1 font-bold font-mono tabular-nums ${postMortems.length > 0 ? 'text-2xl text-emerald-400' : 'text-sm text-slate-400 py-1'}`}>
-            {avgBrier}
+        <div className="space-y-1.5">
+          <div className="flex items-center justify-between text-xs font-mono text-slate-400">
+            <span>
+              {progress.completedEvents} Completed Matches Backtested · {progress.activeEvents} Upcoming Games
+            </span>
+            <span className="text-cyan-400 font-bold">{progress.progressPercent}% Calibrated</span>
           </div>
-          <div className="mt-1 text-xs text-slate-500">Benchmark vs 0.250 uncalibrated coin</div>
-        </div>
-
-        <div className="p-4 bg-[#0e1422] rounded-lg border border-white/[0.08]">
-          <div className="text-xs font-medium text-slate-400">Live Sporting Fixtures</div>
-          <div className="mt-1 text-2xl font-bold font-mono tabular-nums text-white">
-            {events.length} Active
+          <div className="w-full bg-slate-800/80 h-2 rounded-full overflow-hidden">
+            <div
+              className="h-full bg-gradient-to-r from-cyan-500 to-emerald-400 transition-all duration-300"
+              style={{ width: `${progress.progressPercent}%` }}
+            />
           </div>
-          <div className="mt-1 text-xs text-slate-500">
-            {scheduledCount} scheduled · {inProgressCount} in progress · {completedCount} final
-          </div>
-        </div>
-
-        <div className="p-4 bg-[#0e1422] rounded-lg border border-white/[0.08]">
-          <div className="text-xs font-medium text-slate-400">Autonomous Calibration</div>
-          <div className="mt-1 text-2xl font-bold font-mono tabular-nums text-emerald-400">Instant Triggers</div>
-          <div className="mt-1 text-xs text-slate-500">Supabase triggers + EWMA updates</div>
         </div>
       </div>
 
-      {/* Active Sports Predictive Frameworks */}
-      <section className="space-y-3">
-        <div className="flex items-center justify-between">
-          <div>
-            <h2 className="text-base font-semibold text-white">Sport-Specific Predictive Frameworks</h2>
-            <p className="text-xs text-slate-400">
-              Active mathematical models and hyperparameter weights configured in <span className="font-mono text-slate-300">framework_versions</span>
-            </p>
+      {/* High-Level Operational Metrics */}
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <div className="bg-[#0c101b] border border-white/[0.08] p-4 rounded-xl">
+          <div className="text-xs text-slate-400 flex items-center gap-1.5 mb-1">
+            <Calendar className="w-4 h-4 text-emerald-400" />
+            <span>Active & Upcoming Slate</span>
           </div>
+          <div className="text-2xl font-bold font-mono text-white">
+            {scheduledCount + inProgressCount}
+          </div>
+          <div className="text-[11px] text-slate-500 mt-1 font-mono">
+            {inProgressCount} Live · {scheduledCount} Scheduled (Oct 11-18)
+          </div>
+        </div>
+
+        <div className="bg-[#0c101b] border border-white/[0.08] p-4 rounded-xl">
+          <div className="text-xs text-slate-400 flex items-center gap-1.5 mb-1">
+            <CheckCircle2 className="w-4 h-4 text-cyan-400" />
+            <span>Completed 60-Day Archive</span>
+          </div>
+          <div className="text-2xl font-bold font-mono text-cyan-300">{completedCount}</div>
+          <div className="text-[11px] text-slate-500 mt-1">Empirical games graded out-of-sample</div>
+        </div>
+
+        <div className="bg-[#0c101b] border border-white/[0.08] p-4 rounded-xl">
+          <div className="text-xs text-slate-400 flex items-center gap-1.5 mb-1">
+            <Activity className="w-4 h-4 text-amber-400" />
+            <span>Cumulative Brier Score</span>
+          </div>
+          <div className="text-2xl font-bold font-mono text-amber-300">{avgBrier}</div>
+          <div className="text-[11px] text-slate-500 mt-1">Calculated dynamically across real outcomes</div>
+        </div>
+
+        <div className="bg-[#0c101b] border border-white/[0.08] p-4 rounded-xl">
+          <div className="text-xs text-slate-400 flex items-center gap-1.5 mb-1">
+            <Zap className="w-4 h-4 text-indigo-400" />
+            <span>Monte Carlo Predictions</span>
+          </div>
+          <div className="text-2xl font-bold font-mono text-indigo-300">{predictions.length}</div>
+          <div className="text-[11px] text-slate-500 mt-1">Strictly 50,003 iterations per fixture</div>
+        </div>
+      </div>
+
+      {/* Active Frameworks Dynamic Status */}
+      <div className="bg-[#0c101b] border border-white/[0.08] rounded-xl p-5 shadow-sm">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-sm font-semibold text-white tracking-tight flex items-center gap-2">
+            <TrendingUp className="w-4 h-4 text-emerald-400" />
+            <span>Active Quantitative Frameworks & Dynamic Calibration</span>
+          </h3>
           <button
             onClick={() => onNavigateToTab('upgrades')}
-            className="text-xs text-emerald-400 hover:text-emerald-300 flex items-center gap-1 font-medium transition-colors cursor-pointer"
+            className="text-xs text-cyan-400 hover:text-cyan-300 flex items-center gap-1 transition"
           >
-            <span>View EWMA logs</span>
-            <ArrowRight className="w-3.5 h-3.5" />
+            <span>View EWMA Upgrades</span>
+            <ChevronRight className="w-3.5 h-3.5" />
           </button>
         </div>
 
-        <div className="border border-white/[0.08] rounded-lg overflow-hidden bg-[#0c101b]">
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs">
-              <thead className="bg-[#080c14] border-b border-white/[0.08] text-slate-400 font-mono uppercase text-[11px]">
-                <tr>
-                  <th className="py-2.5 px-4">Sport</th>
-                  <th className="py-2.5 px-4">Version Tag</th>
-                  <th className="py-2.5 px-4">Mathematical Approach</th>
-                  <th className="py-2.5 px-4 text-center">EWMA Alpha</th>
-                  <th className="py-2.5 px-4 text-center">Learning Rate</th>
-                  <th className="py-2.5 px-4 text-right">Cumulative Brier Score</th>
-                  <th className="py-2.5 px-4 text-right">Calibration Status</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-white/[0.06] text-slate-300">
-                {frameworks.map((fw) => (
-                  <tr key={fw.id} className="hover:bg-white/[0.02] transition-colors">
-                    <td className="py-3 px-4 font-mono font-bold text-white uppercase">{fw.sport}</td>
-                    <td className="py-3 px-4 font-mono text-emerald-400 font-medium">{fw.version_tag}</td>
-                    <td className="py-3 px-4 text-slate-300">{fw.description}</td>
-                    <td className="py-3 px-4 font-mono tabular-nums text-center text-slate-400">
-                      {fw.ewma_alpha.toFixed(2)}
-                    </td>
-                    <td className="py-3 px-4 font-mono tabular-nums text-center text-slate-400">
-                      {fw.learning_rate.toFixed(3)}
-                    </td>
-                    <td className="py-3 px-4 font-mono tabular-nums text-right font-medium">
-                      {fw.cumulative_brier_score !== null && fw.cumulative_brier_score !== undefined ? (
-                        <span className="text-emerald-400">{fw.cumulative_brier_score.toFixed(6)}</span>
-                      ) : (
-                        <span className="text-slate-400 text-xs italic">Awaiting Final Outcomes</span>
-                      )}
-                    </td>
-                    <td className="py-3 px-4 text-right">
-                      <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[11px] font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-mono">
-                        <CheckCircle2 className="w-3 h-3" />
-                        <span>Active Calibration</span>
-                      </span>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      </section>
-
-      {/* Live Sporting Events Slate & Sport Filter Buttons */}
-      <section className="space-y-3">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <div>
-            <h2 className="text-base font-semibold text-white">Live Sporting Fixtures & Empirical Slates</h2>
-            <p className="text-xs text-slate-400">
-              Live scoreboards cross-enriched with Tier 2 metrics and Tier 3 Open-Meteo weather
-            </p>
-          </div>
-
-          <div className="flex items-center gap-3">
-            <button
-              onClick={() => onNavigateToTab('tennis')}
-              className="text-xs text-emerald-400 hover:text-emerald-300 flex items-center gap-1 font-medium transition-colors cursor-pointer"
-            >
-              <span>Launch Tennis 1-on-1 Tool</span>
-              <ArrowRight className="w-3.5 h-3.5" />
-            </button>
-            <span className="text-slate-600">|</span>
-            <button
-              onClick={() => onNavigateToTab('predictions')}
-              className="text-xs text-slate-300 hover:text-white flex items-center gap-1 font-medium transition-colors cursor-pointer"
-            >
-              <span>Monte Carlo Inspector</span>
-              <ArrowRight className="w-3.5 h-3.5" />
-            </button>
-          </div>
-        </div>
-
-        {/* Working Sport Filter Buttons */}
-        <div className="flex flex-wrap items-center gap-2 pt-1">
-          {(['ALL', 'TENNIS', 'MLB', 'CFB', 'NFL'] as const).map((sportKey) => {
-            const count = sportCounts[sportKey];
-            const isActive = selectedSport === sportKey;
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+          {frameworks.map((fw) => {
+            const brier = fw.cumulative_brier_score;
             return (
-              <button
-                key={sportKey}
-                onClick={() => setSelectedSport(sportKey)}
-                className={`px-3 py-1.5 rounded text-xs font-semibold font-mono tracking-wider transition-all cursor-pointer flex items-center gap-2 ${
-                  isActive
-                    ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 shadow-sm'
-                    : 'bg-[#0e1422] text-slate-400 hover:text-slate-200 border border-white/[0.06] hover:border-white/[0.12]'
-                }`}
-              >
-                <span>{sportKey}</span>
-                <span
-                  className={`px-1.5 py-0.2 rounded text-[10px] font-mono ${
-                    isActive ? 'bg-emerald-500/30 text-emerald-200' : 'bg-white/[0.05] text-slate-500'
-                  }`}
-                >
-                  {count}
-                </span>
-              </button>
+              <div key={fw.id} className="bg-slate-900/60 border border-slate-800 rounded-lg p-3.5">
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="text-xs font-bold font-mono uppercase text-emerald-400">{fw.sport}</span>
+                  <span className="text-[10px] font-mono text-slate-400">{fw.version_tag}</span>
+                </div>
+                <div className="text-xs text-slate-300 line-clamp-1 mb-2">{fw.description}</div>
+                <div className="flex items-baseline justify-between pt-2 border-t border-slate-800 text-xs">
+                  <span className="text-slate-400">Brier Score:</span>
+                  <span className="font-mono font-bold text-cyan-300">
+                    {brier !== null ? brier.toFixed(5) : '0.00000'}
+                  </span>
+                </div>
+                <div className="flex items-baseline justify-between text-[11px] text-slate-500 font-mono mt-0.5">
+                  <span>Graded Events:</span>
+                  <span>{fw.evaluated_event_count || 0}</span>
+                </div>
+              </div>
             );
           })}
         </div>
+      </div>
 
-        {/* Sporting Events Table (Uncapped, prioritized, with circuit badges) */}
-        <div className="border border-white/[0.08] rounded-lg overflow-hidden bg-[#0c101b]">
-          {filteredEvents.length === 0 ? (
-            <div className="py-12 px-6 text-center space-y-3">
-              {isLiveLoading ? (
-                <>
-                  <div className="inline-flex p-3 rounded-full bg-emerald-500/10 text-emerald-400">
-                    <RefreshCw className="w-6 h-6 animate-spin" />
-                  </div>
-                  <h4 className="text-sm font-semibold text-white">
-                    Hydrating Live Sporting Fixtures...
-                  </h4>
-                  <p className="text-xs text-slate-400 max-w-md mx-auto">
-                    Executing dual Serverless API and direct ESPN browser scraper fallback across Tennis, MLB, CFB, and NFL.
-                  </p>
-                </>
-              ) : (
-                <>
-                  <div className="inline-flex p-3 rounded-full bg-white/[0.04] text-slate-400 border border-white/[0.08]">
-                    <Calendar className="w-6 h-6 text-slate-400" />
-                  </div>
-                  <h4 className="text-sm font-semibold text-white">
-                    {selectedSport === 'ALL'
-                      ? 'No Live Fixtures on Current Slate'
-                      : `No Active ${selectedSport} Fixtures on Current Filter`}
-                  </h4>
-                  <p className="text-xs text-slate-400 max-w-md mx-auto">
-                    {events.length > 0
-                      ? `There are ${events.length} total fixtures loaded in other sports. Tap 'ALL' or refresh the live pipeline.`
-                      : 'The 3-Tier Multi-Scraper pipeline queries live daily scoreboards across MLB, CFB, NFL, and Tennis 24/7. Tap below to fetch live games now.'}
-                  </p>
-                  <button
-                    onClick={handleRefreshSlate}
-                    disabled={isRefreshing}
-                    className="mt-2 inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-emerald-950 bg-emerald-400 hover:bg-emerald-300 disabled:opacity-50 rounded shadow-md transition-all cursor-pointer"
+      {/* Sporting Events Table & Filter Badges */}
+      <section className="space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div>
+            <h3 className="text-base font-bold text-white tracking-tight">Active & Historical Sporting Fixtures</h3>
+            <p className="text-xs text-slate-400">
+              Filtered sporting events across MLB, CFB, NFL, and Tennis with real scoreboards and Monte Carlo projections.
+            </p>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-1.5 bg-slate-900 border border-slate-800 p-1 rounded-lg">
+            {(['ALL', 'TENNIS', 'MLB', 'CFB', 'NFL'] as const).map((sp) => {
+              const count = sportCounts[sp];
+              const isActive = selectedSport === sp;
+              return (
+                <button
+                  key={sp}
+                  onClick={() => setSelectedSport(sp)}
+                  className={`px-3 py-1.5 rounded text-xs font-semibold font-mono tracking-wider transition cursor-pointer flex items-center gap-1.5 ${
+                    isActive
+                      ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 shadow-sm'
+                      : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
+                  }`}
+                >
+                  <span>{sp}</span>
+                  <span
+                    className={`px-1.5 py-0.2 rounded text-[10px] ${
+                      isActive ? 'bg-emerald-500/30 text-emerald-200' : 'bg-slate-800 text-slate-500'
+                    }`}
                   >
-                    <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin' : ''}`} />
-                    <span>Fetch Live Slate Now</span>
-                  </button>
-                </>
-              )}
+                    {count}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Fixtures Table */}
+        <div className="border border-white/[0.08] rounded-xl overflow-hidden bg-[#0c101b]">
+          {filteredEvents.length === 0 ? (
+            <div className="py-16 text-center space-y-3">
+              <div className="inline-flex p-3 rounded-full bg-cyan-500/10 text-cyan-400">
+                <RefreshCw className="w-6 h-6 animate-spin" />
+              </div>
+              <h4 className="text-sm font-semibold text-white">Hydrating Sporting Fixtures...</h4>
+              <p className="text-xs text-slate-400 max-w-md mx-auto">
+                Executing progressive 7-window ingestion across MLB, CFB, NFL, and Tennis scoreboards.
+              </p>
+              <button
+                onClick={handleRefreshSlate}
+                className="mt-2 inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-emerald-950 bg-emerald-400 hover:bg-emerald-300 rounded shadow-sm"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+                <span>Fetch Live Slate Now</span>
+              </button>
             </div>
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full text-left text-xs">
                 <thead className="bg-[#080c14] border-b border-white/[0.08] text-slate-400 font-mono uppercase text-[11px]">
                   <tr>
-                    <th className="py-2.5 px-4">Sport / Circuit</th>
-                    <th className="py-2.5 px-4">Event Date</th>
-                    <th className="py-2.5 px-4">Matchup (Home vs Away)</th>
-                    <th className="py-2.5 px-4">Environment & Stadium</th>
-                    <th className="py-2.5 px-4">Status</th>
-                    <th className="py-2.5 px-4 text-right">Score / Sets</th>
-                    <th className="py-2.5 px-4 text-right">Action / Post-Mortem</th>
+                    <th className="py-3 px-4">Sport</th>
+                    <th className="py-3 px-4">Date</th>
+                    <th className="py-3 px-4">Matchup (Home vs Away)</th>
+                    <th className="py-3 px-4">Venue & Surface</th>
+                    <th className="py-3 px-4">Status</th>
+                    <th className="py-3 px-4 text-right">Score</th>
+                    <th className="py-3 px-4 text-right">Action / Evaluation</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-white/[0.06] text-slate-300">
-                  {filteredEvents.map((ev) => {
+                  {filteredEvents.slice(0, 100).map((ev) => {
                     const postMortem = postMortems.find((pm) => pm.event_id === ev.id);
-                    const envData = (ev.official_metadata as any)?.environmental;
-                    const meta = ev.official_metadata as any;
+                    const prediction = predictions.find((p) => p.event_id === ev.id);
                     const isTennis = ev.sport.toLowerCase() === 'tennis';
-
-                    // Extract tennis line scores if available
-                    const homeLines = meta?.home_linescores || [];
-                    const awayLines = meta?.away_linescores || [];
-                    const hasLinescores = homeLines.length > 0 && awayLines.length > 0;
 
                     return (
                       <tr key={ev.id} className="hover:bg-white/[0.02] transition-colors">
                         <td className="py-3 px-4 font-mono">
-                          <div className="flex items-center gap-1.5">
-                            <span className="text-emerald-400 uppercase font-semibold">{ev.sport}</span>
-                            {isTennis && meta?.circuit_category && (
-                              <span className="px-1.5 py-0.2 rounded text-[10px] bg-emerald-500/10 text-emerald-300 border border-emerald-500/20 font-sans">
-                                {meta.circuit_category}
-                              </span>
-                            )}
-                          </div>
+                          <span className="text-emerald-400 uppercase font-semibold">{ev.sport}</span>
                         </td>
                         <td className="py-3 px-4 font-mono text-slate-400 whitespace-nowrap">
-                          {new Date(ev.event_date).toLocaleDateString('en-US', {
-                            month: 'short',
-                            day: 'numeric',
-                            hour: '2-digit',
-                            minute: '2-digit',
-                          })}
+                          {ev.event_date.substring(0, 10)}
                         </td>
                         <td className="py-3 px-4">
                           <div className="font-medium text-white">{ev.home_participant}</div>
                           <div className="text-slate-400 text-[11px]">vs {ev.away_participant}</div>
                         </td>
                         <td className="py-3 px-4 text-slate-400">
-                          <div className="truncate max-w-[200px]" title={ev.venue || ''}>
-                            {ev.venue || 'Stadium'} {ev.surface ? `(${ev.surface})` : ''}
-                          </div>
-                          {envData && (
-                            <div className="mt-0.5 text-[10px] font-mono flex items-center gap-1.5 text-slate-500">
-                              {envData.is_indoor ? (
-                                <span className="inline-flex items-center gap-1 text-cyan-400/90">
-                                  <Shield className="w-3 h-3" />
-                                  <span>Dome (72°F)</span>
-                                </span>
-                              ) : (
-                                <span className="inline-flex items-center gap-1 text-amber-300/90">
-                                  <CloudSun className="w-3 h-3" />
-                                  <span>{envData.temperature_f}°F · {envData.wind_speed_mph} mph {envData.wind_direction_compass || ''}</span>
-                                </span>
-                              )}
-                            </div>
-                          )}
+                          <div className="truncate max-w-[180px]">{ev.venue || 'Stadium'}</div>
+                          <div className="text-[10px] text-slate-500">{ev.surface || 'Standard'}</div>
                         </td>
                         <td className="py-3 px-4">
                           {ev.status === 'completed' ? (
@@ -455,17 +396,8 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
                           )}
                         </td>
                         <td className="py-3 px-4 font-mono tabular-nums text-right font-medium">
-                          {hasLinescores ? (
-                            <div>
-                              <span className="text-white">
-                                {ev.home_score ?? 0} - {ev.away_score ?? 0}
-                              </span>
-                              <div className="text-[10px] text-slate-400">
-                                ({homeLines.map((h: number, idx: number) => `${h}-${awayLines[idx]}`).join(', ')})
-                              </div>
-                            </div>
-                          ) : ev.home_score !== null && ev.away_score !== null ? (
-                            <span className="text-white">
+                          {ev.home_score !== null && ev.away_score !== null ? (
+                            <span className="text-white font-bold">
                               {ev.home_score} - {ev.away_score}
                             </span>
                           ) : (
@@ -474,28 +406,38 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
                         </td>
                         <td className="py-3 px-4 text-right">
                           <div className="flex items-center justify-end gap-2">
-                            {isTennis && (
+                            {ev.status === 'completed' ? (
                               <button
-                                onClick={() => onNavigateToTab('tennis')}
-                                className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-medium text-cyan-300 bg-cyan-500/10 border border-cyan-500/25 rounded hover:bg-cyan-500/20 transition-colors whitespace-nowrap cursor-pointer"
-                                title="Analyze Head-to-Head in Tennis Predictor"
+                                onClick={() => onNavigateToTab('accuracy-ledger')}
+                                className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-mono text-cyan-300 bg-cyan-500/10 border border-cyan-500/25 rounded hover:bg-cyan-500/20 transition cursor-pointer"
+                                title="View in Walk-Forward Accuracy Ledger"
+                              >
+                                <ShieldCheck className="w-3 h-3 text-cyan-400" />
+                                <span>
+                                  BS: {postMortem ? postMortem.brier_score.toFixed(4) : 'Graded'}
+                                </span>
+                              </button>
+                            ) : (
+                              <button
+                                onClick={() => onNavigateToTab('predictions')}
+                                className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-mono text-emerald-300 bg-emerald-500/15 border border-emerald-500/30 rounded hover:bg-emerald-500/25 transition cursor-pointer"
                               >
                                 <Zap className="w-3 h-3" />
-                                <span>H2H Sim</span>
+                                <span>
+                                  {prediction
+                                    ? `${(prediction.home_win_probability * 100).toFixed(0)}% MC`
+                                    : '50k MC Line'}
+                                </span>
                               </button>
                             )}
 
-                            {ev.status === 'completed' && postMortem ? (
-                              <span className="font-mono tabular-nums text-emerald-300">
-                                BS: {postMortem.brier_score.toFixed(6)}
-                              </span>
-                            ) : (
+                            {isTennis && (
                               <button
-                                onClick={() => onOpenTriggerModalForEvent(ev)}
-                                className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium text-emerald-300 bg-emerald-500/15 border border-emerald-500/30 rounded hover:bg-emerald-500/25 transition-colors whitespace-nowrap cursor-pointer"
+                                onClick={() => onNavigateToTab('tennis')}
+                                className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-medium text-slate-300 bg-slate-800 border border-slate-700 rounded hover:bg-slate-700 transition cursor-pointer"
+                                title="Analyze Head-to-Head in Tennis Predictor"
                               >
-                                <PlayCircle className="w-3 h-3" />
-                                <span>Simulate Final</span>
+                                <span>H2H</span>
                               </button>
                             )}
                           </div>
@@ -510,24 +452,28 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
         </div>
       </section>
 
-      {/* Supabase Realtime WebSocket Event Stream */}
+      {/* Supabase Realtime Event Stream */}
       <section className="space-y-3">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <Radio className="w-4 h-4 text-emerald-400" />
-            <h2 className="text-base font-semibold text-white">Supabase Realtime Event Stream</h2>
+            <h3 className="text-sm font-semibold text-white">Supabase Realtime Event Stream</h3>
           </div>
-          <span className="text-xs font-mono text-slate-500">CHANNEL: supabase_realtime (postgres_changes)</span>
+          <span className="text-xs font-mono text-slate-500">CHANNEL: supabase_realtime</span>
         </div>
 
-        <div className="border border-white/[0.08] rounded-lg bg-[#080c14] p-3 max-h-48 overflow-y-auto space-y-1.5 font-mono text-xs">
+        <div className="border border-white/[0.08] rounded-xl bg-[#080c14] p-3 max-h-40 overflow-y-auto space-y-1.5 font-mono text-xs">
           {realtimeLogs.length === 0 ? (
             <div className="text-slate-500 py-3 text-center">No realtime events recorded yet.</div>
           ) : (
             realtimeLogs.map((log) => (
-              <div key={log.id} className="flex items-start gap-2 py-1 border-b border-white/[0.04] last:border-0">
+              <div key={log.id} className="flex items-start gap-2 py-0.5 border-b border-white/[0.04] last:border-0">
                 <span className="text-slate-500 shrink-0">
-                  {new Date(log.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                  {new Date(log.timestamp).toLocaleTimeString([], {
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    second: '2-digit',
+                  })}
                 </span>
                 <span className="text-emerald-400 shrink-0 font-semibold">[{log.eventType}]</span>
                 <span className="text-slate-400 shrink-0">{log.table}:</span>

@@ -111,3 +111,46 @@ export interface RealtimeMessage {
   eventType: 'INSERT' | 'UPDATE' | 'DELETE';
   summary: string;
 }
+
+export interface HistoricalWindowConfig {
+  id: number;
+  title: string;
+  startDate: string;
+  endDate: string;
+  isForwardLooking?: boolean;
+}
+
+export interface WindowHydrationProgress {
+  currentWindowIndex: number;
+  totalWindows: number;
+  currentWindowName: string;
+  eventsLoaded: number;
+  completedEvents: number;
+  activeEvents: number;
+  status: 'idle' | 'hydrating' | 'calibrating' | 'completed' | 'error';
+  progressPercent: number;
+}
+
+export interface VegasComparisonRecord {
+  eventId: string;
+  sport: SportType;
+  eventDate: string;
+  homeParticipant: string;
+  awayParticipant: string;
+  homeScore: number | null;
+  awayScore: number | null;
+  actualWinner: string | null;
+  modelHomeProb: number;
+  modelAwayProb: number;
+  benchmarkType: 'vegas_closing' | 'prior_record_baseline';
+  benchmarkLabel: string;
+  vegasImpliedHomeProb: number;
+  actualOutcome: number; // 1.0 = home win, 0.0 = away win
+  modelBrierScore: number;
+  benchmarkBrierScore: number;
+  brierAdvantage: number; // benchmarkBrierScore - modelBrierScore (>0 is model advantage)
+  preMatchHomeRecord: { wins: number; losses: number };
+  preMatchAwayRecord: { wins: number; losses: number };
+  cumulativeModelBrier: number;
+  cumulativeBenchmarkBrier: number;
+}

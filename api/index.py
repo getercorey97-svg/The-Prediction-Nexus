@@ -911,39 +911,67 @@ async def upsert_events_to_supabase(client: httpx.AsyncClient, events: List[Dict
         "Prefer": "resolution=merge-duplicates,return=representation",
     }
 
-    records: List[Dict[str, Any]] = []
-    now_iso = datetime.datetime.utcnow().isoformat() + "Z"
+    def make_records(strip_cols: set = None) -> List[Dict[str, Any]]:
+        strip = strip_cols or set()
+        out = []
+        for ev in events:
+            meta = dict(ev.get("official_metadata", {}))
+            rec: Dict[str, Any] = {
+                "sport": ev["sport"],
+                "external_id": ev["external_id"],
+                "event_date": ev["event_date"],
+                "home_participant": ev["home_participant"],
+                "away_participant": ev["away_participant"],
+                "surface": ev.get("surface"),
+                "venue": ev.get("venue"),
+                "status": ev["status"],
+                "home_score": ev.get("home_score"),
+                "away_score": ev.get("away_score"),
+                "updated_at": now_iso,
+            }
+            if "actual_winner" not in strip and "actual_winner" in ev:
+                rec["actual_winner"] = ev.get("actual_winner")
+            elif "actual_winner" in strip and "actual_winner" in ev:
+                meta["actual_winner"] = ev.get("actual_winner")
 
-    for ev in events:
-        records.append({
-            "sport": ev["sport"],
-            "external_id": ev["external_id"],
-            "event_date": ev["event_date"],
-            "home_participant": ev["home_participant"],
-            "away_participant": ev["away_participant"],
-            "surface": ev.get("surface"),
-            "venue": ev.get("venue"),
-            "status": ev["status"],
-            "home_score": ev.get("home_score"),
-            "away_score": ev.get("away_score"),
-            "actual_winner": ev.get("actual_winner"),
-            "official_metadata": ev.get("official_metadata", {}),
-            "updated_at": now_iso,
-        })
+            rec["official_metadata"] = meta
+            out.append(rec)
+        return out
 
     try:
+        payload = make_records()
         resp = await client.post(
             endpoint,
             headers=headers,
-            json=records,
+            json=payload,
             params={"on_conflict": "external_id"},
             timeout=12.0,
         )
         if resp.status_code in [200, 201]:
-            logger.info(f"Supabase REST: Upserted {len(records)} events successfully.")
-            return len(records)
+            logger.info(f"Supabase REST: Upserted {len(payload)} events successfully.")
+            return len(payload)
+        
+        # Check if error mentions missing column (e.g. PGRST204: Could not find the 'actual_winner' column)
+        resp_text = resp.text
+        if "Could not find the" in resp_text or "PGRST204" in resp_text:
+            match = re.search(r"Could not find the '([^']+)' column", resp_text)
+            missing_col = match.group(1) if match else "actual_winner"
+            strip_set = {missing_col}
+            retry_payload = make_records(strip_set)
+            retry_resp = await client.post(
+                endpoint,
+                headers=headers,
+                json=retry_payload,
+                params={"on_conflict": "external_id"},
+                timeout=12.0,
+            )
+            if retry_resp.status_code in [200, 201]:
+                logger.info(f"Supabase REST: Clean retry upserted {len(retry_payload)} events (stripped '{missing_col}').")
+                return len(retry_payload)
+            else:
+                logger.warning(f"Supabase REST retry returned {retry_resp.status_code}: {retry_resp.text[:200]}")
         else:
-            logger.warning(f"Supabase REST returned {resp.status_code}: {resp.text[:200]}")
+            logger.warning(f"Supabase REST returned {resp.status_code}: {resp_text[:200]}")
     except Exception as exc:
         logger.warning(f"Supabase REST error: {exc}")
 
@@ -1025,7 +1053,10 @@ def health_endpoint() -> Dict[str, Any]:
 
 
 @app.get("/api/events")
-async def list_events_endpoint(sport: Optional[str] = Query(None)) -> List[Dict[str, Any]]:
+async def list_events_endpoint(
+    sport: Optional[str] = Query(None),
+    limit: int = Query(500, le=1000),
+) -> List[Dict[str, Any]]:
     """
     Returns live sporting events. First queries memory cache; if empty,
     fetches directly from Supabase REST or executes an instantaneous scrape.
@@ -1039,7 +1070,7 @@ async def list_events_endpoint(sport: Optional[str] = Query(None)) -> List[Dict[
             if not sport_filter or ev["sport"] == sport_filter:
                 filtered.append(ev)
         if filtered:
-            return sorted(filtered, key=lambda x: x.get("event_date", ""), reverse=False)
+            return sorted(filtered, key=lambda x: x.get("event_date", ""), reverse=False)[:limit]
 
     # Fallback to Supabase REST query
     client_headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
@@ -1053,7 +1084,7 @@ async def list_events_endpoint(sport: Optional[str] = Query(None)) -> List[Dict[
             params = {
                 "select": "*",
                 "order": "event_date.asc",
-                "limit": "250",
+                "limit": str(limit),
             }
             if sport_filter:
                 params["sport"] = f"eq.{sport_filter}"

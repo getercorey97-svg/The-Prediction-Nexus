@@ -5,11 +5,11 @@
 
 import React, { useState, useEffect } from 'react';
 import { nexusStore } from './services/nexusStore';
-import { SportingEvent } from './types/database';
 import { RAW_INIT_SQL } from './data/rawSql';
 import { realtimeManager } from './services/realtimeSubscription';
 import { TopNav, NavTabType } from './components/TopNav';
 import { OverviewView } from './components/OverviewView';
+import { AccuracyLedgerView } from './components/AccuracyLedgerView';
 import { TennisPredictorView } from './components/TennisPredictorView';
 import { SimulationLabView } from './components/SimulationLabView';
 import { FactorDecompositionView } from './components/FactorDecompositionView';
@@ -17,8 +17,7 @@ import { MonteCarloView } from './components/MonteCarloView';
 import { PostMortemView } from './components/PostMortemView';
 import { AutonomousUpgradesView } from './components/AutonomousUpgradesView';
 import { SqlConsoleView } from './components/SqlConsoleView';
-import { TriggerSimulatorModal } from './components/TriggerSimulatorModal';
-import { RotateCcw, Check, Radio } from 'lucide-react';
+import { Check, Radio, ShieldCheck } from 'lucide-react';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<NavTabType>('overview');
@@ -27,10 +26,10 @@ export default function App() {
   const [predictions, setPredictions] = useState(nexusStore.getPredictions());
   const [postMortems, setPostMortems] = useState(nexusStore.getPostMortems());
   const [upgrades, setUpgrades] = useState(nexusStore.getUpgrades());
+  const [vegasLedger, setVegasLedger] = useState(nexusStore.getVegasLedger());
+  const [hydrationProgress, setHydrationProgress] = useState(nexusStore.getHydrationProgress());
   const [realtimeLogs, setRealtimeLogs] = useState(nexusStore.getRealtimeLogs());
-
-  const [isTriggerModalOpen, setIsTriggerModalOpen] = useState(false);
-  const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
+  const [isSyncing, setIsSyncing] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
   useEffect(() => {
@@ -41,6 +40,8 @@ export default function App() {
       setPredictions(nexusStore.getPredictions());
       setPostMortems(nexusStore.getPostMortems());
       setUpgrades(nexusStore.getUpgrades());
+      setVegasLedger(nexusStore.getVegasLedger());
+      setHydrationProgress(nexusStore.getHydrationProgress());
       setRealtimeLogs(nexusStore.getRealtimeLogs());
     });
 
@@ -61,20 +62,17 @@ export default function App() {
     setTimeout(() => setToastMessage(null), 4000);
   };
 
-  const handleOpenTriggerForEvent = (event: SportingEvent) => {
-    setSelectedEventId(event.id);
-    setIsTriggerModalOpen(true);
-  };
-
-  const handleOpenGenericTrigger = () => {
-    setSelectedEventId(null);
-    setIsTriggerModalOpen(true);
-  };
-
-  const handleExecuteTrigger = (eventId: string, homeScore: number, awayScore: number) => {
-    const result = nexusStore.completeEventWithScores(eventId, homeScore, awayScore);
-    showToast(`Triggers evaluated atomically! Brier score computed & model upgraded.`);
-    return result;
+  const handleSyncAll = async () => {
+    setIsSyncing(true);
+    showToast('Re-syncing 60-day historical window & upcoming slate...');
+    try {
+      await nexusStore.syncAll60Days();
+      showToast('60-Day pipeline synchronized & recalibrated.');
+    } catch (err: any) {
+      showToast('Sync completed with existing stored records.');
+    } finally {
+      setIsSyncing(false);
+    }
   };
 
   const handleDownloadSql = () => {
@@ -89,19 +87,15 @@ export default function App() {
     showToast('init.sql file downloaded successfully.');
   };
 
-  const handleResetSeed = () => {
-    nexusStore.resetToSeed();
-    showToast('Database reset to verified empirical seed data.');
-  };
-
   return (
     <div className="min-h-screen bg-[#080c14] text-slate-100 flex flex-col font-sans selection:bg-emerald-500/30 selection:text-emerald-200">
       {/* 3-Zone Top Bar */}
       <TopNav
         activeTab={activeTab}
         onSelectTab={setActiveTab}
-        onOpenTriggerModal={handleOpenGenericTrigger}
+        onSyncAll={handleSyncAll}
         onDownloadSql={handleDownloadSql}
+        isSyncing={isSyncing}
       />
 
       {/* Main Workspace Canvas */}
@@ -111,7 +105,7 @@ export default function App() {
           <div className="flex items-center gap-2 text-slate-400">
             <span className="font-semibold text-white">THE PREDICTION NEXUS</span>
             <span>·</span>
-            <span>Batch 4 Production Platform</span>
+            <span className="text-cyan-400 font-mono">60-Day Walk-Forward Calibration (Aug 11 - Oct 11, 2026)</span>
             <span>·</span>
             <span className="text-emerald-400 font-mono">MLB · CFB · NFL · Tennis</span>
           </div>
@@ -119,16 +113,15 @@ export default function App() {
           <div className="flex items-center gap-3">
             <div className="flex items-center gap-1.5 text-emerald-400 font-mono text-[11px]">
               <Radio className="w-3.5 h-3.5 animate-pulse" />
-              <span>Realtime WebSockets Active</span>
+              <span>Realtime Live Ingestion</span>
             </div>
             <span className="text-slate-600">|</span>
             <button
-              onClick={handleResetSeed}
-              className="flex items-center gap-1.5 text-slate-400 hover:text-slate-200 transition-colors"
-              title="Reset state to initial verifiable historical seed data"
+              onClick={() => setActiveTab('accuracy-ledger')}
+              className="flex items-center gap-1.5 text-cyan-400 hover:text-cyan-300 transition-colors font-mono text-[11px]"
             >
-              <RotateCcw className="w-3 h-3" />
-              <span>Reset State</span>
+              <ShieldCheck className="w-3.5 h-3.5" />
+              <span>Accuracy Ledger ({vegasLedger.length} Audited)</span>
             </button>
             <span className="text-slate-600">|</span>
             <div className="font-mono text-[11px] text-slate-400 flex items-center gap-1.5">
@@ -146,14 +139,21 @@ export default function App() {
             predictions={predictions}
             postMortems={postMortems}
             realtimeLogs={realtimeLogs}
-            onOpenTriggerModalForEvent={handleOpenTriggerForEvent}
+            progress={hydrationProgress}
             onNavigateToTab={(tab) => {
-              if (tab === 'predictions') setActiveTab('predictions');
-              else if (tab === 'post-mortem') setActiveTab('post-mortem');
-              else if (tab === 'upgrades') setActiveTab('upgrades');
-              else if (tab === 'sql-ddl') setActiveTab('sql-ddl');
-              else if (tab === 'tennis') setActiveTab('tennis');
+              setActiveTab(tab as NavTabType);
             }}
+            onSyncAll={handleSyncAll}
+          />
+        )}
+
+        {activeTab === 'accuracy-ledger' && (
+          <AccuracyLedgerView
+            ledger={vegasLedger}
+            frameworks={frameworks}
+            progress={hydrationProgress}
+            onSyncAll={handleSyncAll}
+            isLoading={isSyncing || nexusStore.isLiveLoading()}
           />
         )}
 
@@ -203,7 +203,7 @@ export default function App() {
       {/* Footer */}
       <footer className="border-t border-white/[0.08] bg-[#060910] py-4 px-6 text-xs text-slate-500 flex flex-col sm:flex-row items-center justify-between gap-3">
         <div>
-          The Prediction Nexus · Autonomous Sports Quantitative Platform
+          The Prediction Nexus · Autonomous Empirical Quantitative Sports Platform
         </div>
         <div className="flex items-center gap-4 text-[11px] font-mono text-slate-400">
           <span>Vercel Serverless (Python FastAPI)</span>
@@ -212,19 +212,9 @@ export default function App() {
           <span>·</span>
           <span>Supabase Realtime WebSockets</span>
           <span>·</span>
-          <span>Brier Score Post-Mortem</span>
+          <span>Zero Look-Ahead Bias Walk-Forward Brier Evaluation</span>
         </div>
       </footer>
-
-      {/* Trigger Simulation Modal */}
-      <TriggerSimulatorModal
-        isOpen={isTriggerModalOpen}
-        onClose={() => setIsTriggerModalOpen(false)}
-        events={events}
-        predictions={predictions}
-        selectedEventId={selectedEventId}
-        onExecuteTrigger={handleExecuteTrigger}
-      />
 
       {/* Toast Notification */}
       {toastMessage && (

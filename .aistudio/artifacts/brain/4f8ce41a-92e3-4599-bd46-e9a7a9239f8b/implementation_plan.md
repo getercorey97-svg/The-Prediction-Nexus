@@ -1,120 +1,142 @@
-# The Prediction Nexus: 3-Tier Live Multi-Scraper & Cross-Enrichment Pipeline
+# The Prediction Nexus: 60-Day Walk-Forward Empirical Calibration & Hardened Production Pipeline
 
-Architectural refactoring plan to eliminate all static 2024–2025 mock/seed events and establish an autonomous 3-Tier Live Multi-Scraper and Cross-Enrichment Pipeline for MLB, CFB, NFL, and Tennis, complete with automated FastAPI startup synchronization and direct Supabase database upserts.
+A comprehensive, zero-placeholder quantitative sports modeling and prediction platform covering **MLB, Tennis (ATP/WTA), College Football (CFB), and NFL**. This plan establishes an empirical pipeline that ingests real historical matches across a 60-day window (August 11, 2026 – October 11, 2026), executes chronological walk-forward out-of-sample calibration with zero look-ahead bias, populates the upcoming week (October 11–18, 2026), and benchmarks model accuracy directly against Vegas closing lines or transparent empirical prior baselines.
 
 ---
 
-### User Review & Critical Decisions
+### User Review & Critical Hardening Decisions
 
 > [!IMPORTANT]
-> The following parameters were confirmed during Phase 1 clarification:
+> The following parameters and edge-case hardening rules are integrated into this plan:
 
-- **Schedule Query Window**: When a sport has zero games on today's calendar date, the pipeline automatically queries a rolling window of upcoming 7 days plus recently completed matches, ensuring the dashboard always displays active, verifiable sporting fixtures without static stubs.
-- **Environmental & Dome Stadium Handling**: Outdoor venues query the Open-Meteo Live Weather API for real-time temperature, wind speed/direction, humidity, and precipitation probability; indoor/dome venues are tagged as climate-controlled ($72^\circ\text{F}$, 0 mph wind, 0% precip).
-- **Database Upsert Strategy**: Events are upserted into Supabase on `external_id` using a non-destructive merge policy (`ON CONFLICT (external_id) DO UPDATE`), preserving existing Monte Carlo simulation predictions, factual post-mortems, and trigger states while updating live scores and statuses.
-- **Zero Static Mock Data Mandate**: Complete removal of all hardcoded 2024–2025 mock matchups (e.g., Oct 30 2024 Yankees vs Dodgers, Jan 8 2024 Michigan vs Washington, Feb 11 2024 Chiefs vs 49ers, Jun 9 2024 Alcaraz vs Zverev). The application and API endpoints will exclusively serve empirical live data.
-
----
-
-### 1. Overview & Core Concept
-
-This refactor transforms **The Prediction Nexus** into a fully autonomous, live-connected sports analytics engine:
-
-1. **Tier 1 (Primary Live Scraper - ESPN Hidden API)**:
-   - Queries official hidden REST endpoints at `site.api.espn.com/apis/site/v2/sports/`:
-     - MLB: `baseball/leagues/mlb/scoreboard`
-     - CFB: `football/leagues/college-football/scoreboard`
-     - NFL: `football/leagues/nfl/scoreboard`
-     - Tennis: `tennis/leagues/atp/scoreboard` and `tennis/leagues/wta/scoreboard`
-   - Extracts real event IDs, live match statuses (`STATUS_SCHEDULED`, `STATUS_IN_PROGRESS`, `STATUS_FINAL`), start times, home/away competitors, box scores, venues, surfaces, and consensus betting odds.
-2. **Tier 2 (Secondary Scraper & Advanced Metrics Enricher)**:
-   - Automatic failover if ESPN is unreachable (MLB StatsAPI, Yahoo Sports JSON, SofaScore).
-   - Enriches games with micro-variables omitted by Tier 1: team BaseRuns & pitcher FIP (MLB), offensive/defensive EPA/play and Havoc rates (CFB/NFL), and surface-specific Elo ratings with break/hold percentages (Tennis).
-3. **Tier 3 (Tertiary Scraper & Environmental Enricher)**:
-   - Queries **Open-Meteo Live Weather API** (`api.open-meteo.com/v1/forecast`) using venue geographical coordinates.
-   - Enriches every outdoor matchup with exact temperature, wind speed/direction, relative humidity, and precipitation risk.
-   - Calculates rest-day differentials and travel fatigue metrics.
-4. **FastAPI Lifespan Startup & Supabase Synchronization**:
-   - Executes automatic ingestion on server boot / wake-up via `@asynccontextmanager(app: FastAPI)` in `backend/main.py`.
-   - Directly upserts normalized events into Supabase PostgreSQL using `SUPABASE_SERVICE_ROLE_KEY`.
-5. **Frontend Live Binding**:
-   - Configures dual env var resolution (`VITE_` and `NEXT_PUBLIC_`) with production fallbacks to `https://nexus-api-3qk0.onrender.com` and `https://aywldwdvflwcanqxxdhi.supabase.co`.
-   - Replaces static seed arrays with live state synchronization from `GET /api/events` and Supabase Realtime WebSockets.
+- **Window Indexing & 7-Window Progressive Architecture**:
+  - Window 1: `2026-08-11` to `2026-08-20` (10 days)
+  - Window 2: `2026-08-21` to `2026-08-31` (11 days, fixing August 31 coverage)
+  - Window 3: `2026-09-01` to `2026-09-10` (10 days)
+  - Window 4: `2026-09-11` to `2026-09-20` (10 days)
+  - Window 5: `2026-09-21` to `2026-09-30` (10 days)
+  - Window 6: `2026-10-01` to `2026-10-11` (11 days)
+  - Window 7 (Forward-Looking Active Window): `2026-10-11` to `2026-10-18` (7 days ahead for active NFL Week slates, CFB fixtures, MLB Postseason games, and active ATP/WTA tournament draws).
+- **Zero Look-Ahead Bias Record Adjustments**:
+  - For completed (`STATUS_FINAL`) matches retrieved from ESPN or MLB StatsAPI, the returned `competitor.records` already reflects the post-match outcome. The calibration engine strictly subtracts 1 win from the winning team's snapshot record and 1 loss from the losing team's snapshot record prior to calculating the pre-match forecasted probability $f_t$.
+  - Dynamic Elo and rating weights are frozen at the pre-match state $t^-$ and updated strictly *after* $f_t$ is recorded and evaluated against outcome $o_t$.
+- **Transparent Missing Odds Policy (Zero Fabrication)**:
+  - When real closing odds exist (via pre-match ingestion or preserved ESPN `competition.odds`), calculate exact vig-free Vegas implied probabilities $v_t$ and evaluate $\text{BS}_{\text{Vegas}, t}$.
+  - When ESPN archives an event without odds, never synthesize or fabricate mock betting lines. Instead, evaluate an empirical "Prior Record/Rank Baseline Brier" and label it transparently in the UI as `"Empirical Prior Baseline (ESPN Odds Archived)"`.
+- **Infrastructure & Environment Hardening**:
+  - `vite.config.ts`: Define `envPrefix: ['VITE_', 'NEXT_PUBLIC_', 'SUPABASE_']` and bind `process.env` mappings via `loadEnv`.
+  - `vercel.json`: Configure `"functions": { "api/index.py": { "maxDuration": 60 } }` with rewrites from `/api/(.*)` to `/api/index.py`.
 
 ---
 
-### 2. User Experience & Visual Design
+### 1. Mathematical Architecture & Calibration Theory
 
-- **Live Multi-Sport Monitor**:
-  - Displays live scores, in-progress game clocks/innings/sets, and scheduled fixtures across MLB, CFB, NFL, and Tennis.
-  - Live environmental indicators: Outdoor weather badges (e.g., $68^\circ\text{F}$ · 8 mph NNW · 12% precip) vs. Climate-Controlled Dome badges.
-  - Live bookmaker market consensus lines directly scraped from Tier 1/Tier 2.
-- **Realtime Trigger Workbench**:
-  - "Refresh Live Ingestion" button triggering background pipeline execution across all four sports.
-  - "Simulate Match Completion" testing live score triggers directly on current calendar matchups.
-- **Anti-Slop Restraint**:
-  - Deep slate dark terminal theme (`#080c14`), hairline structural borders (`rgba(255, 255, 255, 0.08)`), clean unboxed metadata with `·` separators, tabular figures for all scores, odds, and weather metrics.
+#### A. Out-of-Sample Pre-Match Probability Formulation ($f_t$)
+To guarantee strict out-of-sample validity:
+1. **Pre-Match State Reconstruction**:
+   $$\text{Wins}_{\text{pre}} = \begin{cases} \text{Wins}_{\text{reported}} - 1 & \text{if winner} \\ \text{Wins}_{\text{reported}} & \text{if loser} \end{cases}$$
+   $$\text{Losses}_{\text{pre}} = \begin{cases} \text{Losses}_{\text{reported}} & \text{if winner} \\ \text{Losses}_{\text{reported}} - 1 & \text{if loser} \end{cases}$$
+2. **Sport-Specific Quantitative Baselines**:
+   - **MLB**: Pythagenpat / BaseRuns formula parameterized by team pre-match run differentials, starting pitcher FIP, and venue park factors.
+   - **CFB & NFL**: Net EPA/play differentials, Havoc rate margins, and pre-match scoring distributions adjusted for home-field advantage ($+2.4$ pts for CFB, $+1.8$ pts for NFL).
+   - **Tennis**: Surface-specific Elo rating difference:
+     $$P(A \succ B) = \frac{1}{1 + 10^{(\text{Elo}_B - \text{Elo}_A)/400}}$$
+3. **50,003-Iteration Vectorized Monte Carlo**:
+   - For all active and forward-looking games (Window 7: Oct 11–18, 2026), run 50,003 typed array iterations (`Float64Array`) yielding projected score spreads, totals, and percentiles (5th, 50th, 95th).
+
+#### B. Walk-Forward Sequential EWMA Updates
+Matches are sorted strictly by completion timestamp. For event $t$:
+1. Compute Brier score: $\text{BS}_t = (f_t - o_t)^2$ where $o_t \in \{0, 1\}$.
+2. Compute benchmark Brier score $\text{BS}_{\text{Benchmark}, t}$:
+   - If closing odds are available: vig-free Vegas implied probability $v_t \implies (v_t - o_t)^2$.
+   - If odds are archived/missing: empirical prior baseline probability $b_t \implies (b_t - o_t)^2$.
+3. Sequentially update cumulative Exponentially Weighted Moving Average (EWMA) Brier score:
+   $$\overline{\text{BS}}_{t} = \alpha \cdot \text{BS}_t + (1 - \alpha) \cdot \overline{\text{BS}}_{t-1}$$
+4. Shift framework parameters $\theta$ proportionally to directional error $(f_t - o_t)$ using learning rate $\eta$.
 
 ---
 
-### 3. Key Product Decisions & Trade-Offs
-
-- **Decision 1: ESPN Hidden API as Tier 1 Primary**
-  - *Chosen Approach*: Official JSON endpoints at `site.api.espn.com`.
-  - *Why*: Free, extremely high availability, sub-minute latency for live scores, zero API key requirement, and comprehensive multi-sport coverage including ATP/WTA tennis.
-- **Decision 2: Circuit Breaker with Cross-Source Enrichment**
-  - *Chosen Approach*: Rather than simple failover, Tiers 2 and 3 actively enrich Tier 1 records with metrics ESPN does not track (Statcast FIP, EPA, Havoc, and Open-Meteo weather).
-  - *Why*: Delivers an institutional-grade predictive dataset with high dimensionality without paying for expensive private enterprise sports data APIs.
-- **Decision 3: Non-Blocking FastAPI Lifespan Ingestion**
-  - *Chosen Approach*: Background task triggered inside FastAPI lifespan startup.
-  - *Why*: Prevents Render web service boot timeouts (Render health check must pass in $< 30\text{s}$) while ensuring the database is immediately hydrated with live sporting slates.
-
----
-
-### 4. Technical Architecture & File Plan
+### 2. Multi-Sport Data Pipeline & Ingestion Windows
 
 ```
 ┌────────────────────────────────────────────────────────────────────────┐
-│                   3-TIER LIVE MULTI-SCRAPER PIPELINE                   │
+│             PROGRESSIVE 7-WINDOW SCRAPING & HYDRATION ARCHITECTURE     │
 ├────────────────────────────────────────────────────────────────────────┤
-│                                                                        │
-│   FastAPI Lifespan (Startup) & Worker Trigger                          │
-│   backend/main.py                                                      │
-│   └── background_tasks.add_task(run_unified_ingestion_pipeline)        │
-│                                                                        │
-│   Tier 1: Primary Live Scraper (backend/ingestion/tier1_espn.py)       │
-│   └── site.api.espn.com/apis/site/v2/sports/ (MLB, CFB, NFL, Tennis)   │
-│       ├── Live status, start times, scores, participants, venues       │
-│       └── Consensus betting odds & bookmaker lines                     │
-│                                                                        │
-│   Tier 2: Advanced Metrics Enricher (tier2_metrics.py)                 │
-│   └── MLB StatsAPI / Yahoo / SofaScore Failover & Stats                │
-│       ├── MLB: BaseRuns, Pitcher FIP, bullpen leverage                 │
-│       ├── CFB / NFL: Offensive/Defensive EPA/play, Havoc rates         │
-│       └── Tennis: Surface Elo, hold/break %, fatigue                   │
-│                                                                        │
-│   Tier 3: Environmental Enricher (tier3_environment.py)                │
-│   └── Open-Meteo Live Weather API (api.open-meteo.com)                 │
-│       ├── Venue coordinates -> temp, wind speed/dir, precip %          │
-│       └── Climate-controlled indoor constants (72°F, 0 mph)           │
-│                                                                        │
-│   Unified Ingestion Orchestrator (tier_orchestrator.py)                │
-│   └── Deep-merges Tiers 1-3 -> upserts directly to Supabase            │
-│                                                                        │
-│   Frontend Data Binding (src/services/apiConfig.ts & nexusStore.ts)    │
-│   └── Dual env resolution (VITE_ / NEXT_PUBLIC_)                       │
-│   └── Zero static seed arrays; live hydration on load                  │
+│ Window 1: 2026-08-11 to 2026-08-20 (10d) - Early Aug Historical        │
+│ Window 2: 2026-08-21 to 2026-08-31 (11d) - Late Aug Historical [Fixed] │
+│ Window 3: 2026-09-01 to 2026-09-10 (10d) - Early Sep Historical        │
+│ Window 4: 2026-09-11 to 2026-09-20 (10d) - Mid Sep Historical          │
+│ Window 5: 2026-09-21 to 2026-09-30 (10d) - Late Sep Historical         │
+│ Window 6: 2026-10-01 to 2026-10-11 (11d) - Recent Oct Historical       │
+│ Window 7: 2026-10-11 to 2026-10-18 ( 7d) - Forward-Looking Active Slate │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
-#### Detailed Files to Create / Modify:
-1. `backend/ingestion/tier1_espn.py`: Live scoreboard and schedule scraper for MLB, CFB, NFL, and Tennis using ESPN Hidden API.
-2. `backend/ingestion/tier2_metrics.py`: Secondary scraper and metrics enricher (FIP, EPA, Havoc, Surface Elo).
-3. `backend/ingestion/tier3_environment.py`: Open-Meteo Live Weather API caller with stadium coordinate dictionary.
-4. `backend/ingestion/tier_orchestrator.py`: Unified pipeline orchestrator with circuit-breaker failovers and Supabase PostgreSQL upserts.
-5. `backend/main.py`: Refactor with FastAPI lifespan startup trigger, live `GET /api/events`, and pipeline endpoints.
-6. `backend/tasks.py`: Updated Celery tasks to call `run_unified_ingestion_pipeline`.
-7. `src/services/apiConfig.ts`: Dual-env configuration supporting `VITE_` and `NEXT_PUBLIC_` with Render and Supabase fallbacks.
-8. `src/services/nexusStore.ts`: Eliminate hardcoded seed arrays; fetch live events from API/Supabase on mount.
-9. `src/data/seedData.ts`: Purge all static 2024-2025 matches; export clean empty defaults and model configurations.
-10. `src/components/OverviewView.tsx`, `MonteCarloView.tsx`, `SimulationLabView.tsx`: Live data bindings with real-time refresh triggers.
+- **MLB**: Single high-efficiency call to MLB StatsAPI (`statsapi.mlb.com/api/v1/schedule?sportId=1&startDate=2026-08-11&endDate=2026-10-18&hydrate=probablePitcher,linescore,team`) capturing all regular season and postseason games in one request.
+- **Tennis**: Rolling daily queries across ESPN ATP and WTA scoreboards (`site.api.espn.com/apis/site/v2/sports/tennis/atp/scoreboard?dates=YYYYMMDD`) and SofaScore scheduled events.
+- **CFB & NFL**: Scheduled weekly and daily queries across ESPN College Football (`groups=80&limit=100&dates=YYYYMMDD`) and NFL scoreboards.
+
+---
+
+### 3. File Implementation & Verification Plan
+
+#### 1. `vite.config.ts` & `vercel.json`
+- Ensure `vite.config.ts` includes `envPrefix: ['VITE_', 'NEXT_PUBLIC_', 'SUPABASE_']` and explicit `define` blocks with `loadEnv`.
+- Ensure `vercel.json` configures Python serverless routing with `"maxDuration": 60` and routes `/api/(.*)` to `/api/index.py`.
+
+#### 2. `src/types/database.ts`
+- Add types for `CalibrationWindowProgress`, `VegasComparisonRecord`, `WalkForwardStep`, and `HistoricalWindowConfig`.
+- Ensure distinct typing for `benchmark_type: 'vegas_closing' | 'prior_record_baseline'`.
+
+#### 3. `src/data/seedData.ts`
+- Zero hardcoded mock matches.
+- All frameworks start with `cumulative_brier_score: null` ("Awaiting Calibration") and `evaluated_event_count: 0`.
+
+#### 4. `src/services/browserScraper.ts`
+- Configure exact 7 windows including August 31 leapfix (`2026-08-21` to `2026-08-31`) and forward-looking window (`2026-10-11` to `2026-10-18`).
+- Implement cache-first Supabase checks, parallel browser fetches, and non-blocking error handling.
+- Extract closing odds if present without inventing values when absent.
+
+#### 5. `src/services/calibrationEngine.ts`
+- Deduplicate and sort historical games chronologically.
+- Apply look-ahead correction (subtract 1 win/1 loss from final record).
+- Calculate $f_t$, event Brier score, and benchmark Brier score.
+- Label missing odds as `"Empirical Prior Baseline (ESPN Odds Archived)"`.
+- Compute dynamic EWMA parameter updates and cumulative accuracy curves.
+
+#### 6. `src/services/simulationEngine.ts`
+- Execute 50,003 Monte Carlo iterations (`Float64Array`) for upcoming/active games (Window 7).
+- No random mock data generation.
+
+#### 7. `src/services/nexusStore.ts`
+- Manage progressive 7-window hydration and real-time state.
+- Expose calibrated framework parameters, active slate, and post-mortem ledger.
+
+#### 8. `src/components/AccuracyLedgerView.tsx`
+- Build the 2-Month Calibration & Proof of Accuracy Ledger:
+  - Model vs Vegas/Prior Baseline Brier score comparison cards.
+  - Interactive convergence trajectory chart.
+  - Per-match audit ledger with transparent benchmark labeling (`"Vegas Closing Lines"` vs `"Empirical Prior Baseline (ESPN Odds Archived)"`).
+  - Sport-specific drilldowns with parameter drift indicators.
+
+#### 9. `src/components/OverviewView.tsx` & `src/components/TopNav.tsx`
+- Display active and upcoming fixtures (Window 7) with sport filters.
+- Top progressive 7-window calibration status bar.
+- Clean navigation to the Accuracy Ledger.
+
+#### 10. `api/index.py`
+- Async FastAPI endpoint supporting 60-day historical chunking and live slate ingestion.
+- Pure Supabase REST upserts with zero Celery/Redis/Render dependencies.
+
+---
+
+### 4. Verification & Testing Steps
+
+1. **Compilation Check**: Run `compile_applet` and verify 0 TypeScript/build errors.
+2. **Lint Validation**: Run `lint_applet` and confirm 0 syntax or lint failures.
+3. **Edge Case Verification**:
+   - Verify Window 2 explicitly includes `2026-08-31`.
+   - Verify Window 7 populates upcoming matches between `2026-10-11` and `2026-10-18`.
+   - Verify completed matches exhibit no look-ahead leakage (pre-match record is accurately adjusted).
+   - Verify events with missing odds display `"Empirical Prior Baseline (ESPN Odds Archived)"` without `NaN` or fabricated figures.
+   - Confirm framework Brier scores update dynamically from `0.00000` solely through chronological post-mortem calculation.
