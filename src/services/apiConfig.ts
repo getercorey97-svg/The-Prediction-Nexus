@@ -59,11 +59,12 @@ export async function fetchLiveEventsApi(sport?: string): Promise<any[]> {
  * Triggers background or sync slate ingestion across the 3-Tier scraper pipeline.
  */
 export async function triggerLiveIngestApi(sport: string = 'all'): Promise<any> {
-  const url = `${API_BASE_URL}/api/ingest/${sport}`;
+  const path = sport === 'all' ? '/api/ingest/all' : `/api/ingest/${sport.toLowerCase()}`;
+  const url = `${API_BASE_URL}${path}`;
   try {
     const res = await fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
     });
     if (res.ok) {
       return await res.json();

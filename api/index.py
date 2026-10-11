@@ -512,23 +512,25 @@ def make_tennis_dedup_key(p1: str, p2: str, date_str: str) -> str:
     return f"{sorted_pair}_{d}"
 
 
-async def fetch_espn_tennis_feed(client: httpx.AsyncClient, circuit: str, date_str: str) -> List[Dict[str, Any]]:
+async def fetch_espn_tennis_feed(client: httpx.AsyncClient, circuit: str, date_str: Optional[str] = None) -> List[Dict[str, Any]]:
     """
     Tier 1 Scraper with Fixed ESPN Tennis Parser:
     Traverses BOTH event.groupings[] -> grouping.competitions[] AND top-level competitions[].
     Extracts player display name from competitor['athlete']['displayName'] (not team).
     """
-    url = f"{ESPN_BASE}/tennis/{circuit}/scoreboard?dates={date_str}"
+    url = f"{ESPN_BASE}/tennis/{circuit}/scoreboard"
+    if date_str:
+        url += f"?dates={date_str}"
     events: List[Dict[str, Any]] = []
     try:
-        resp = await client.get(url, headers=HEADERS, timeout=12.0)
+        resp = await client.get(url, headers=HEADERS, timeout=6.0)
         if resp.status_code != 200:
             return []
         data = resp.json()
         raw_events = data.get("events", [])
 
         for ev in raw_events:
-            tourney_name = ev.get("name") or ev.get("shortName") or "Tennis Tournament"
+            tourney_name = ev.get("name") or ev.get("shortName") or f"{circuit.upper()} Tournament"
             competitions_list = []
 
             # 1. Check nested groupings (tournaments)
@@ -555,6 +557,8 @@ async def fetch_espn_tennis_feed(client: httpx.AsyncClient, circuit: str, date_s
                 away_score = None
                 linescores_h = []
                 linescores_a = []
+                home_winner = False
+                away_winner = False
 
                 for c in competitors:
                     # Fix: prioritize athlete displayName instead of team displayName
@@ -568,6 +572,8 @@ async def fetch_espn_tennis_feed(client: httpx.AsyncClient, circuit: str, date_s
 
                     order = c.get("order", 0)
                     h_a = c.get("homeAway", "")
+                    is_home = h_a == "home" or order == 0
+                    is_winner = c.get("winner", False) is True
 
                     # Extract line scores
                     lscores = []
@@ -577,15 +583,19 @@ async def fetch_espn_tennis_feed(client: httpx.AsyncClient, circuit: str, date_s
                                 lscores.append(int(ls["value"]))
                             except Exception:
                                 pass
+                        elif isinstance(ls, (int, float)):
+                            lscores.append(int(ls))
 
-                    if h_a == "home" or order == 0:
+                    if is_home:
                         home_p = name
                         home_score = c.get("score")
                         linescores_h = lscores
+                        home_winner = is_winner
                     else:
                         away_p = name
                         away_score = c.get("score")
                         linescores_a = lscores
+                        away_winner = is_winner
 
                 if not home_p or not away_p:
                     continue
@@ -606,7 +616,19 @@ async def fetch_espn_tennis_feed(client: httpx.AsyncClient, circuit: str, date_s
                             market_odds["home_moneyline"] = odd["homeTeamOdds"]["moneyLine"]
                         break
 
-                event_date = comp.get("date") or (datetime.datetime.utcnow().isoformat() + "Z")
+                event_date = comp.get("date") or ev.get("date") or (datetime.datetime.utcnow().isoformat() + "Z")
+
+                actual_winner = None
+                if status == "completed":
+                    if home_winner:
+                        actual_winner = home_p
+                    elif away_winner:
+                        actual_winner = away_p
+                    elif home_score is not None and away_score is not None:
+                        try:
+                            actual_winner = home_p if int(home_score) > int(away_score) else away_p
+                        except Exception:
+                            pass
 
                 events.append({
                     "sport": "tennis",
@@ -619,7 +641,7 @@ async def fetch_espn_tennis_feed(client: httpx.AsyncClient, circuit: str, date_s
                     "status": status,
                     "home_score": int(home_score) if home_score is not None and str(home_score).isdigit() else None,
                     "away_score": int(away_score) if away_score is not None and str(away_score).isdigit() else None,
-                    "actual_winner": home_p if status == "completed" and (home_score or 0) > (away_score or 0) else (away_p if status == "completed" else None),
+                    "actual_winner": actual_winner,
                     "official_metadata": {
                         "source": "espn_hidden_api",
                         "circuit": circuit.upper(),
@@ -629,7 +651,7 @@ async def fetch_espn_tennis_feed(client: httpx.AsyncClient, circuit: str, date_s
                     },
                 })
     except Exception as exc:
-        logger.warning(f"ESPN Tennis ({circuit}) fetch error for {date_str}: {exc}")
+        logger.warning(f"ESPN Tennis ({circuit}) fetch error: {exc}")
 
     return events
 
@@ -638,6 +660,7 @@ async def fetch_sofascore_tennis_slate(client: httpx.AsyncClient) -> List[Dict[s
     """
     High-volume 24/7 Global Tennis Scraper (ATP, WTA, ATP Challenger, WTA 125, ITF Men's/Women's).
     Simultaneously pulls live and scheduled feeds.
+    Silently catches 403 Forbidden or network blocks without raising.
     """
     events: List[Dict[str, Any]] = []
     today_str = datetime.datetime.utcnow().strftime("%Y-%m-%d")
@@ -651,8 +674,9 @@ async def fetch_sofascore_tennis_slate(client: httpx.AsyncClient) -> List[Dict[s
 
     for url in urls:
         try:
-            resp = await client.get(url, headers=SOFASCORE_HEADERS, timeout=10.0)
+            resp = await client.get(url, headers=SOFASCORE_HEADERS, timeout=4.0)
             if resp.status_code != 200:
+                # Silently catch 403 Forbidden or rate-limits
                 continue
             data = resp.json()
             raw_list = data.get("events", [])
@@ -703,7 +727,8 @@ async def fetch_sofascore_tennis_slate(client: httpx.AsyncClient) -> List[Dict[s
                     },
                 })
         except Exception as exc:
-            logger.debug(f"SofaScore tennis fetch failed ({url}): {exc}")
+            # Silently catch SofaScore error so ESPN matches serve reliably
+            logger.debug(f"SofaScore tennis fetch skipped ({url}): {exc}")
 
     return events
 
@@ -808,9 +833,12 @@ async def fetch_espn_team_sports(client: httpx.AsyncClient, sport: str) -> List[
     return events
 
 
+WEATHER_CACHE: Dict[str, Dict[str, Any]] = {}
+
+
 async def enrich_weather_open_meteo(client: httpx.AsyncClient, event: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Tier 3 Scraper: Stadium Weather via Open-Meteo.
+    Tier 3 Scraper: Stadium Weather via Open-Meteo with Venue Caching.
     Domes & indoor venues receive climate constants (72°F, 0 mph wind, roof closed).
     """
     venue = (event.get("venue") or "").lower()
@@ -827,30 +855,40 @@ async def enrich_weather_open_meteo(client: httpx.AsyncClient, event: Dict[str, 
         }
         return event
 
+    venue_key = venue or "default"
+    if venue_key in WEATHER_CACHE:
+        event.setdefault("official_metadata", {})["weather"] = WEATHER_CACHE[venue_key]
+        return event
+
     try:
-        # Default coordinates fallback (e.g. general US center or venue location)
         lat = 39.8283
         lon = -98.5795
         w_url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current_weather=true"
-        resp = await client.get(w_url, timeout=4.0)
+        resp = await client.get(w_url, timeout=2.0)
         if resp.status_code == 200:
             w_data = resp.json().get("current_weather", {})
             temp_c = w_data.get("temperature", 20.0)
             temp_f = round(temp_c * 9.0 / 5.0 + 32.0, 1)
-            event.setdefault("official_metadata", {})["weather"] = {
+            weather_data = {
                 "indoor": False,
                 "temperature_f": temp_f,
                 "wind_speed_mph": round(w_data.get("windspeed", 5.0) * 0.621371, 1),
                 "condition": "Outdoor Live Conditions",
             }
+            WEATHER_CACHE[venue_key] = weather_data
+            event.setdefault("official_metadata", {})["weather"] = weather_data
+            return event
     except Exception:
-        event.setdefault("official_metadata", {})["weather"] = {
-            "indoor": False,
-            "temperature_f": 68.0,
-            "wind_speed_mph": 4.5,
-            "condition": "Standard Climate Constant",
-        }
+        pass
 
+    fallback_weather = {
+        "indoor": False,
+        "temperature_f": 68.0,
+        "wind_speed_mph": 4.5,
+        "condition": "Standard Climate Constant",
+    }
+    WEATHER_CACHE[venue_key] = fallback_weather
+    event.setdefault("official_metadata", {})["weather"] = fallback_weather
     return event
 
 
@@ -928,10 +966,10 @@ async def run_pipeline_for_sport(client: httpx.AsyncClient, sport: str) -> List[
 
         tasks = [
             fetch_sofascore_tennis_slate(client),
+            fetch_espn_tennis_feed(client, "atp"),
             fetch_espn_tennis_feed(client, "atp", dates[0]),
-            fetch_espn_tennis_feed(client, "atp", dates[1]),
+            fetch_espn_tennis_feed(client, "wta"),
             fetch_espn_tennis_feed(client, "wta", dates[0]),
-            fetch_espn_tennis_feed(client, "wta", dates[1]),
         ]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -959,7 +997,11 @@ async def run_pipeline_for_sport(client: httpx.AsyncClient, sport: str) -> List[
         enriched.append(ev)
 
     # Upsert to Supabase
-    await upsert_events_to_supabase(client, enriched)
+    try:
+        await upsert_events_to_supabase(client, enriched)
+    except Exception as exc:
+        logger.warning(f"Supabase upsert non-fatal exception: {exc}")
+
     return enriched
 
 
@@ -978,7 +1020,7 @@ def health_endpoint() -> Dict[str, Any]:
         "sports_supported": ["mlb", "cfb", "nfl", "tennis"],
         "cached_live_events": len(LIVE_EVENTS_CACHE),
         "zero_render_zero_celery_zero_redis": True,
-        "version": "3.0.0",
+        "version": "3.1.0",
     }
 
 
@@ -1000,7 +1042,8 @@ async def list_events_endpoint(sport: Optional[str] = Query(None)) -> List[Dict[
             return sorted(filtered, key=lambda x: x.get("event_date", ""), reverse=False)
 
     # Fallback to Supabase REST query
-    async with httpx.AsyncClient(timeout=10.0) as client:
+    client_headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+    async with httpx.AsyncClient(timeout=8.0, headers=client_headers) as client:
         try:
             endpoint = f"{SUPABASE_URL}/rest/v1/sporting_events"
             headers = {
@@ -1010,7 +1053,7 @@ async def list_events_endpoint(sport: Optional[str] = Query(None)) -> List[Dict[
             params = {
                 "select": "*",
                 "order": "event_date.asc",
-                "limit": "150",
+                "limit": "250",
             }
             if sport_filter:
                 params["sport"] = f"eq.{sport_filter}"
@@ -1020,7 +1063,8 @@ async def list_events_endpoint(sport: Optional[str] = Query(None)) -> List[Dict[
                 db_events = resp.json()
                 for ev in db_events:
                     LIVE_EVENTS_CACHE[ev["external_id"]] = ev
-                return db_events
+                if db_events:
+                    return db_events
         except Exception as exc:
             logger.warning(f"Supabase REST read error: {exc}")
 
@@ -1040,45 +1084,53 @@ async def trigger_sport_ingest_endpoint(sport: str) -> Dict[str, Any]:
     if sport_key not in ["mlb", "cfb", "nfl", "tennis", "all"]:
         raise HTTPException(status_code=400, detail=f"Unsupported sport: {sport}")
 
-    async with httpx.AsyncClient(timeout=15.0) as client:
-        if sport_key == "all":
-            sports_list = ["tennis", "mlb", "cfb", "nfl"]
-            tasks = [run_pipeline_for_sport(client, s) for s in sports_list]
-            batch_results = await asyncio.gather(*tasks, return_exceptions=True)
-            total_count = sum(len(r) for r in batch_results if isinstance(r, list))
-            return {
-                "status": "COMPLETED",
-                "sport": "all",
-                "events_ingested": total_count,
-                "timestamp": datetime.datetime.utcnow().isoformat() + "Z",
-            }
-        else:
-            events = await run_pipeline_for_sport(client, sport_key)
-            return {
-                "status": "COMPLETED",
-                "sport": sport_key,
-                "events_ingested": len(events),
-                "timestamp": datetime.datetime.utcnow().isoformat() + "Z",
-            }
+    if sport_key == "all":
+        return await trigger_ingest_all_endpoint()
+
+    client_headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+    async with httpx.AsyncClient(timeout=8.0, headers=client_headers) as client:
+        events = await run_pipeline_for_sport(client, sport_key)
+        for ev in events:
+            LIVE_EVENTS_CACHE[ev["external_id"]] = ev
+
+        return {
+            "status": "ok",
+            "ingested_count": len(events),
+            "events": events,
+            "timestamp": datetime.datetime.utcnow().isoformat() + "Z",
+        }
 
 
 @app.post("/api/ingest/all")
 async def trigger_ingest_all_endpoint() -> Dict[str, Any]:
     """
-    Autonomous multi-sport ingestion endpoint for GitHub Actions 15-minute cron.
-    Executes parallel async batches across all sports with 15s timeout.
+    Hardened autonomous multi-sport ingestion endpoint.
+    Executes ESPN and Tennis ingestion concurrently with timeout=8.0s.
+    Returns: {"status": "ok", "ingested_count": total_count, "events": list_of_events}
     """
     sports_list = ["tennis", "mlb", "cfb", "nfl"]
-    async with httpx.AsyncClient(timeout=15.0) as client:
+    client_headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+    async with httpx.AsyncClient(timeout=8.0, headers=client_headers) as client:
         tasks = [run_pipeline_for_sport(client, s) for s in sports_list]
         batch_results = await asyncio.gather(*tasks, return_exceptions=True)
-        total_count = sum(len(r) for r in batch_results if isinstance(r, list))
+
+        all_events: List[Dict[str, Any]] = []
+        for res in batch_results:
+            if isinstance(res, list):
+                all_events.extend(res)
+
+        try:
+            await upsert_events_to_supabase(client, all_events)
+        except Exception as upsert_exc:
+            logger.warning(f"Supabase upsert non-fatal exception: {upsert_exc}")
+
+        for ev in all_events:
+            LIVE_EVENTS_CACHE[ev["external_id"]] = ev
+
         return {
-            "status": "COMPLETED",
-            "cron_trigger": "GitHub Actions Autonomous Pipeline",
-            "sports": sports_list,
-            "events_ingested": total_count,
-            "cached_total": len(LIVE_EVENTS_CACHE),
+            "status": "ok",
+            "ingested_count": len(all_events),
+            "events": all_events,
             "timestamp": datetime.datetime.utcnow().isoformat() + "Z",
         }
 

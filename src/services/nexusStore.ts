@@ -19,9 +19,10 @@ import {
   INITIAL_POST_MORTEMS,
   INITIAL_UPGRADES,
 } from '../data/seedData';
-import { fetchLiveEventsApi, triggerLiveIngestApi, runSimulationApi } from './apiConfig';
+import { fetchLiveEventsApi, triggerLiveIngestApi, runSimulationApi, API_BASE_URL } from './apiConfig';
 import { runVectorizedMonteCarlo } from './simulationEngine';
 import { getSupabaseClient, isSupabaseConfigured } from './supabaseClient';
+import { scrapeLiveSlateFromBrowser, upsertEventsToSupabase } from './browserScraper';
 
 type Listener = () => void;
 
@@ -34,11 +35,12 @@ class NexusDatabaseStore {
   private realtimeLogs: RealtimeMessage[] = [];
   private listeners: Set<Listener> = new Set();
   private isLoadingLive: boolean = false;
+  private lastHydrationError: string | null = null;
 
   constructor() {
     this.addRealtimeLog('system', 'INSERT', 'Nexus database initialized. Connecting to 3-Tier Live Multi-Scraper...');
-    // Initial live hydration
-    this.fetchLiveSlate();
+    // Initial live hydration with automatic browser fallback
+    this.refreshLiveIngestion('all');
   }
 
   public subscribe(listener: Listener): () => void {
@@ -92,86 +94,75 @@ class NexusDatabaseStore {
     }
   }
 
+  public getHydrationError(): string | null {
+    return this.lastHydrationError;
+  }
+
+  public clearHydrationError(): void {
+    this.lastHydrationError = null;
+    this.notify();
+  }
+
+  /**
+   * Directly ingests sporting events into local store state,
+   * performs deduplicated non-destructive merge, and runs 50,003 Monte Carlo
+   * simulations for newly added events.
+   */
+  public ingestEvents(rawEvents: any[]): number {
+    let count = 0;
+    if (!Array.isArray(rawEvents) || rawEvents.length === 0) {
+      return 0;
+    }
+
+    for (const raw of rawEvents) {
+      const extId = raw.external_id || `ev_${raw.id || Math.random().toString(36).substring(2, 9)}`;
+      const existingIdx = this.events.findIndex(
+        (e) => e.external_id === extId || (raw.id && e.id === raw.id)
+      );
+
+      const normalizedEvent: SportingEvent = {
+        id: existingIdx !== -1 ? this.events[existingIdx].id : (raw.id || `ev_${extId}`),
+        sport: (raw.sport || 'tennis').toLowerCase(),
+        external_id: extId,
+        event_date: raw.event_date || new Date().toISOString(),
+        home_participant: raw.home_participant || 'TBD',
+        away_participant: raw.away_participant || 'TBD',
+        surface: raw.surface || null,
+        venue: raw.venue || 'Stadium / Court',
+        status: raw.status || 'scheduled',
+        home_score: raw.home_score != null && !isNaN(Number(raw.home_score)) ? Number(raw.home_score) : null,
+        away_score: raw.away_score != null && !isNaN(Number(raw.away_score)) ? Number(raw.away_score) : null,
+        actual_winner: raw.actual_winner ?? null,
+        official_metadata: raw.official_metadata || {},
+        created_at: raw.created_at || new Date().toISOString(),
+        updated_at: raw.updated_at || new Date().toISOString(),
+      };
+
+      if (existingIdx !== -1) {
+        this.events[existingIdx] = {
+          ...this.events[existingIdx],
+          ...normalizedEvent,
+          status: this.events[existingIdx].status === 'completed' ? 'completed' : normalizedEvent.status,
+        };
+      } else {
+        this.events.push(normalizedEvent);
+      }
+      count++;
+
+      // Ensure Monte Carlo prediction exists for this event
+      this.ensurePredictionForEvent(normalizedEvent, raw.market_odds, raw.model_params);
+    }
+
+    this.notify();
+    return count;
+  }
+
   /**
    * Fetches live sporting fixtures from the 3-Tier Multi-Scraper via FastAPI gateway
    * or directly from Supabase, enriching with Monte Carlo simulations.
    */
   public async fetchLiveSlate(sport?: string): Promise<void> {
-    this.isLoadingLive = true;
-    this.notify();
-
-    try {
-      // 1. Try FastAPI live events endpoint
-      let liveEvents: any[] = await fetchLiveEventsApi(sport);
-
-      // 2. If API unreachable or empty, query Supabase sporting_events table
-      if ((!liveEvents || liveEvents.length === 0) && isSupabaseConfigured()) {
-        const client = getSupabaseClient();
-        if (client) {
-          const query = client.from('sporting_events').select('*').order('event_date', { ascending: true });
-          if (sport) {
-            query.eq('sport', sport.toLowerCase());
-          }
-          const { data, error } = await query;
-          if (!error && data && data.length > 0) {
-            liveEvents = data;
-          }
-        }
-      }
-
-      if (liveEvents && liveEvents.length > 0) {
-        // Merge into local event registry by external_id (non-destructive)
-        for (const raw of liveEvents) {
-          const eventId = raw.id || `ev_${raw.external_id || Math.random().toString(36).substring(2, 9)}`;
-          const existingIdx = this.events.findIndex(
-            (e) => e.external_id === raw.external_id || e.id === raw.id
-          );
-
-          const normalizedEvent: SportingEvent = {
-            id: existingIdx !== -1 ? this.events[existingIdx].id : eventId,
-            sport: raw.sport,
-            external_id: raw.external_id,
-            event_date: raw.event_date || new Date().toISOString(),
-            home_participant: raw.home_participant,
-            away_participant: raw.away_participant,
-            surface: raw.surface || null,
-            venue: raw.venue || 'Stadium / Court',
-            status: raw.status || 'scheduled',
-            home_score: raw.home_score ?? null,
-            away_score: raw.away_score ?? null,
-            actual_winner: raw.actual_winner ?? null,
-            official_metadata: raw.official_metadata || {},
-            created_at: raw.created_at || new Date().toISOString(),
-            updated_at: raw.updated_at || new Date().toISOString(),
-          };
-
-          if (existingIdx !== -1) {
-            this.events[existingIdx] = {
-              ...this.events[existingIdx],
-              ...normalizedEvent,
-              // Preserve simulated status if local is completed
-              status: this.events[existingIdx].status === 'completed' ? 'completed' : normalizedEvent.status,
-            };
-          } else {
-            this.events.push(normalizedEvent);
-          }
-
-          // Ensure Monte Carlo prediction exists for this event
-          this.ensurePredictionForEvent(normalizedEvent, raw.market_odds, raw.model_params);
-        }
-
-        this.addRealtimeLog(
-          'sporting_events',
-          'INSERT',
-          `Hydrated ${liveEvents.length} live sporting events from 3-Tier Multi-Scraper pipeline.`
-        );
-      }
-    } catch (err) {
-      console.error('[NexusStore] Failed to hydrate live events:', err);
-    } finally {
-      this.isLoadingLive = false;
-      this.notify();
-    }
+    await this.refreshLiveIngestion(sport || 'all');
   }
 
   /**
@@ -226,12 +217,119 @@ class NexusDatabaseStore {
   }
 
   /**
-   * Triggers live ingestion on the backend gateway.
+   * Refreshes the live sporting slate with dual HTTP Serverless request and
+   * instant browser direct fallback:
+   * 1. Sends direct POST to /api/ingest/all (or /api/ingest/{sport}) with 8s timeout.
+   * 2. If endpoint fails or times out (>8s), instantly queries ESPN public scoreboards directly from browser.
+   * 3. Upserts parsed matches directly into Supabase and updates store state immediately so badges update from 0.
+   * 4. Clears loading spinner lock on error or completion.
    */
-  public async refreshLiveIngestion(sport: string = 'all'): Promise<void> {
-    this.addRealtimeLog('system', 'UPDATE', `Triggered 3-Tier Multi-Scraper pipeline refresh for: ${sport.toUpperCase()}`);
-    await triggerLiveIngestApi(sport);
-    await this.fetchLiveSlate(sport === 'all' ? undefined : sport);
+  public async refreshLiveIngestion(
+    sport: string = 'all'
+  ): Promise<{ success: boolean; count: number; source: string; error?: string | null }> {
+    this.isLoadingLive = true;
+    this.lastHydrationError = null;
+    this.notify();
+
+    try {
+      this.addRealtimeLog('system', 'UPDATE', `Triggered 3-Tier Multi-Scraper pipeline refresh for: ${sport.toUpperCase()}`);
+
+      // Attempt 1: Direct HTTP request to Serverless Ingest endpoint with 8s timeout
+      let apiEvents: any[] = [];
+      let apiSucceeded = false;
+
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 8000);
+        const endpoint = sport === 'all' ? '/api/ingest/all' : `/api/ingest/${sport.toLowerCase()}`;
+        const url = `${API_BASE_URL}${endpoint}`;
+
+        const res = await fetch(url, {
+          method: 'POST',
+          signal: controller.signal,
+          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        });
+        clearTimeout(timeoutId);
+
+        if (res.ok) {
+          const json = await res.json();
+          if (Array.isArray(json.events) && json.events.length > 0) {
+            apiEvents = json.events;
+            apiSucceeded = true;
+          } else if (json.ingested_count > 0) {
+            const fetched = await fetchLiveEventsApi(sport === 'all' ? undefined : sport);
+            if (fetched && fetched.length > 0) {
+              apiEvents = fetched;
+              apiSucceeded = true;
+            }
+          }
+        }
+      } catch (err: any) {
+        console.warn('[NexusStore] Serverless /api/ingest failed or timed out (>8s):', err?.message || err);
+      }
+
+      if (apiSucceeded && apiEvents.length > 0) {
+        const count = this.ingestEvents(apiEvents);
+        this.addRealtimeLog(
+          'sporting_events',
+          'INSERT',
+          `Hydrated ${count} live sporting events from Vercel Serverless API.`
+        );
+        return { success: true, count, source: 'serverless_api' };
+      }
+
+      // Attempt 2: Instant Client-Side Direct Scraper Fallback (ESPN Public Scoreboards)
+      this.addRealtimeLog(
+        'system',
+        'UPDATE',
+        'Triggering client-side direct scraper fallback via ESPN scoreboards...'
+      );
+      const browserEvents = await scrapeLiveSlateFromBrowser();
+
+      if (browserEvents.length > 0) {
+        // Upsert directly into Supabase (non-blocking)
+        await upsertEventsToSupabase(browserEvents);
+
+        // Update local store state immediately so badges update from 0
+        const count = this.ingestEvents(browserEvents);
+        this.addRealtimeLog(
+          'sporting_events',
+          'INSERT',
+          `Hydrated ${count} live sporting fixtures directly via ESPN browser fallback.`
+        );
+        return { success: true, count, source: 'browser_fallback' };
+      }
+
+      // Attempt 3: Restore any existing records from Supabase
+      if (isSupabaseConfigured()) {
+        const client = getSupabaseClient();
+        if (client) {
+          const { data, error } = await client
+            .from('sporting_events')
+            .select('*')
+            .order('event_date', { ascending: true });
+          if (!error && data && data.length > 0) {
+            const count = this.ingestEvents(data);
+            this.addRealtimeLog(
+              'sporting_events',
+              'INSERT',
+              `Restored ${count} sporting fixtures from Supabase cache.`
+            );
+            return { success: true, count, source: 'supabase_cache' };
+          }
+        }
+      }
+
+      this.lastHydrationError = 'Live slate query completed with 0 fixtures. Showing existing stored events.';
+      return { success: false, count: 0, source: 'none', error: this.lastHydrationError };
+    } catch (err: any) {
+      console.error('[NexusStore] Failed to hydrate live events:', err);
+      this.lastHydrationError = err?.message || 'Ingestion encountered an unexpected issue.';
+      return { success: false, count: 0, source: 'error', error: this.lastHydrationError };
+    } finally {
+      this.isLoadingLive = false;
+      this.notify();
+    }
   }
 
   /**

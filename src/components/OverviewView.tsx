@@ -27,6 +27,7 @@ import {
   RefreshCw,
   SlidersHorizontal,
   ChevronRight,
+  AlertTriangle,
 } from 'lucide-react';
 
 interface OverviewViewProps {
@@ -50,6 +51,9 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
 }) => {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [selectedSport, setSelectedSport] = useState<'ALL' | 'TENNIS' | 'MLB' | 'CFB' | 'NFL'>('ALL');
+  const [statusBanner, setStatusBanner] = useState<{ message: string; type: 'success' | 'warning' | 'info' } | null>(null);
+
+  const isLiveLoading = isRefreshing || nexusStore.isLiveLoading();
 
   // Compute live operational KPIs
   const completedCount = events.filter((e) => e.status === 'completed').length;
@@ -64,9 +68,28 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
   const handleRefreshSlate = async () => {
     setIsRefreshing(true);
     try {
-      await nexusStore.refreshLiveIngestion();
+      const res = await nexusStore.refreshLiveIngestion();
+      if (res.success && res.count > 0) {
+        setStatusBanner({
+          message: `Hydrated ${res.count} live sporting fixtures (${res.source === 'browser_fallback' ? 'ESPN Direct Browser Scraper' : 'Serverless API'}). Badges updated!`,
+          type: 'success',
+        });
+      } else {
+        setStatusBanner({
+          message: res.error || 'Live slate sync complete. Showing existing sporting fixtures.',
+          type: 'warning',
+        });
+      }
+    } catch (err: any) {
+      setStatusBanner({
+        message: err?.message || 'Ingestion encountered an issue. Preserving existing stored fixtures.',
+        type: 'warning',
+      });
     } finally {
       setIsRefreshing(false);
+      setTimeout(() => {
+        setStatusBanner(null);
+      }, 7000);
     }
   };
 
@@ -117,6 +140,34 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
           <span>{isRefreshing ? 'Syncing Live Multi-Scraper...' : 'Refresh Live 3-Tier Slate'}</span>
         </button>
       </div>
+
+      {/* Dynamic Status / Hydration Notification Banner */}
+      {statusBanner && (
+        <div
+          className={`p-3.5 rounded-lg border text-xs flex items-center justify-between gap-3 transition-all ${
+            statusBanner.type === 'success'
+              ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
+              : statusBanner.type === 'warning'
+              ? 'bg-amber-500/10 border-amber-500/30 text-amber-300'
+              : 'bg-blue-500/10 border-blue-500/30 text-blue-300'
+          }`}
+        >
+          <div className="flex items-center gap-2.5">
+            {statusBanner.type === 'success' ? (
+              <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+            ) : (
+              <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
+            )}
+            <span>{statusBanner.message}</span>
+          </div>
+          <button
+            onClick={() => setStatusBanner(null)}
+            className="text-slate-400 hover:text-white text-xs underline font-medium cursor-pointer shrink-0"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
 
       {/* KPI Quantitative Strip */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -271,22 +322,43 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
         <div className="border border-white/[0.08] rounded-lg overflow-hidden bg-[#0c101b]">
           {filteredEvents.length === 0 ? (
             <div className="py-12 px-6 text-center space-y-3">
-              <div className="inline-flex p-3 rounded-full bg-emerald-500/10 text-emerald-400">
-                <RefreshCw className="w-6 h-6 animate-spin" />
-              </div>
-              <h4 className="text-sm font-semibold text-white">
-                {selectedSport === 'ALL' ? 'Hydrating Live Sporting Fixtures...' : `No Active ${selectedSport} Fixtures on Current Filter`}
-              </h4>
-              <p className="text-xs text-slate-400 max-w-md mx-auto">
-                The 3-Tier Multi-Scraper pipeline is querying live daily scoreboards across MLB, CFB, NFL, and Tennis 24/7. Zero static dummy arrays.
-              </p>
-              <button
-                onClick={handleRefreshSlate}
-                className="mt-2 inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-emerald-300 bg-emerald-500/15 border border-emerald-500/30 rounded hover:bg-emerald-500/25 transition-colors cursor-pointer"
-              >
-                <RefreshCw className="w-3 h-3" />
-                <span>Fetch Live Slate Now</span>
-              </button>
+              {isLiveLoading ? (
+                <>
+                  <div className="inline-flex p-3 rounded-full bg-emerald-500/10 text-emerald-400">
+                    <RefreshCw className="w-6 h-6 animate-spin" />
+                  </div>
+                  <h4 className="text-sm font-semibold text-white">
+                    Hydrating Live Sporting Fixtures...
+                  </h4>
+                  <p className="text-xs text-slate-400 max-w-md mx-auto">
+                    Executing dual Serverless API and direct ESPN browser scraper fallback across Tennis, MLB, CFB, and NFL.
+                  </p>
+                </>
+              ) : (
+                <>
+                  <div className="inline-flex p-3 rounded-full bg-white/[0.04] text-slate-400 border border-white/[0.08]">
+                    <Calendar className="w-6 h-6 text-slate-400" />
+                  </div>
+                  <h4 className="text-sm font-semibold text-white">
+                    {selectedSport === 'ALL'
+                      ? 'No Live Fixtures on Current Slate'
+                      : `No Active ${selectedSport} Fixtures on Current Filter`}
+                  </h4>
+                  <p className="text-xs text-slate-400 max-w-md mx-auto">
+                    {events.length > 0
+                      ? `There are ${events.length} total fixtures loaded in other sports. Tap 'ALL' or refresh the live pipeline.`
+                      : 'The 3-Tier Multi-Scraper pipeline queries live daily scoreboards across MLB, CFB, NFL, and Tennis 24/7. Tap below to fetch live games now.'}
+                  </p>
+                  <button
+                    onClick={handleRefreshSlate}
+                    disabled={isRefreshing}
+                    className="mt-2 inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-emerald-950 bg-emerald-400 hover:bg-emerald-300 disabled:opacity-50 rounded shadow-md transition-all cursor-pointer"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin' : ''}`} />
+                    <span>Fetch Live Slate Now</span>
+                  </button>
+                </>
+              )}
             </div>
           ) : (
             <div className="overflow-x-auto">
