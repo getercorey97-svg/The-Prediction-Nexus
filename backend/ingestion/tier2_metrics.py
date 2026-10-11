@@ -5,7 +5,8 @@ Enriches Tier 1 live scoreboards with micro-variables omitted by ESPN:
 - MLB: Pitcher FIP splits, BaseRuns offensive potential, bullpen leverage index
 - CFB: Offensive & defensive EPA/play, Havoc rates (TFL, pass defensed, fumble)
 - NFL: Dropback EPA, Rush EPA, Quarterback Completion Percentage Over Expected (CPOE)
-- Tennis: Surface-specific Elo (Hard, Clay, Grass), 1st serve hold %, break conversion %
+- Tennis: Surface-specific Elo (Hard, Clay, Grass, Indoor), 1st serve hold %,
+  break conversion %, and live set/game momentum triggers.
 
 Also serves as a secondary failover scraper (via MLB StatsAPI and sports data feeds)
 if Tier 1 encounters network outages.
@@ -13,6 +14,7 @@ if Tier 1 encounters network outages.
 
 from __future__ import annotations
 
+import re
 import logging
 import datetime
 from typing import Dict, Any, List, Optional
@@ -89,20 +91,114 @@ NFL_EPA_CPOE_BENCHMARK = {
     "Tampa Bay Buccaneers": {"pass_epa": 0.17, "rush_epa": 0.03, "qb_cpoe": 3.4, "rz_eff": 0.60},
 }
 
+# Comprehensive Global ATP & WTA Surface Elo & Momentum Registry
 TENNIS_SURFACE_ELO_REGISTRY = {
-    "Carlos Alcaraz": {"Clay": 2240, "Hard": 2185, "Grass": 2210, "hold_pct": 86.4, "break_pct": 32.1},
-    "Jannik Sinner": {"Clay": 2190, "Hard": 2290, "Grass": 2145, "hold_pct": 91.2, "break_pct": 30.5},
-    "Novak Djokovic": {"Clay": 2160, "Hard": 2225, "Grass": 2235, "hold_pct": 88.5, "break_pct": 29.8},
-    "Alexander Zverev": {"Clay": 2095, "Hard": 2135, "Grass": 1995, "hold_pct": 89.1, "break_pct": 24.6},
-    "Daniil Medvedev": {"Clay": 1940, "Hard": 2170, "Grass": 2015, "hold_pct": 84.8, "break_pct": 27.2},
-    "Taylor Fritz": {"Clay": 1890, "Hard": 2050, "Grass": 1995, "hold_pct": 88.0, "break_pct": 21.8},
-    "Casper Ruud": {"Clay": 2110, "Hard": 1965, "Grass": 1785, "hold_pct": 85.2, "break_pct": 24.1},
-    "Stefanos Tsitsipas": {"Clay": 2075, "Hard": 1995, "Grass": 1895, "hold_pct": 87.4, "break_pct": 22.0},
-    "Iga Swiatek": {"Clay": 2295, "Hard": 2185, "Grass": 1985, "hold_pct": 82.5, "break_pct": 46.2},
-    "Aryna Sabalenka": {"Clay": 2095, "Hard": 2245, "Grass": 2085, "hold_pct": 84.6, "break_pct": 38.5},
-    "Coco Gauff": {"Clay": 2085, "Hard": 2125, "Grass": 1995, "hold_pct": 74.2, "break_pct": 42.8},
-    "Elena Rybakina": {"Clay": 2025, "Hard": 2155, "Grass": 2185, "hold_pct": 85.0, "break_pct": 34.0},
+    # ATP Top Elite
+    "Carlos Alcaraz": {"Clay": 2250, "Hard": 2190, "Grass": 2220, "Indoor": 2130, "hold_pct": 86.8, "break_pct": 32.5},
+    "Jannik Sinner": {"Clay": 2195, "Hard": 2295, "Grass": 2150, "Indoor": 2260, "hold_pct": 91.5, "break_pct": 30.8},
+    "Novak Djokovic": {"Clay": 2165, "Hard": 2230, "Grass": 2240, "Indoor": 2210, "hold_pct": 88.6, "break_pct": 29.9},
+    "Alexander Zverev": {"Clay": 2100, "Hard": 2140, "Grass": 2000, "Indoor": 2120, "hold_pct": 89.2, "break_pct": 24.8},
+    "Daniil Medvedev": {"Clay": 1945, "Hard": 2175, "Grass": 2020, "Indoor": 2140, "hold_pct": 85.1, "break_pct": 27.4},
+    "Taylor Fritz": {"Clay": 1895, "Hard": 2060, "Grass": 2005, "Indoor": 2030, "hold_pct": 88.3, "break_pct": 22.1},
+    "Casper Ruud": {"Clay": 2115, "Hard": 1970, "Grass": 1790, "Indoor": 1940, "hold_pct": 85.5, "break_pct": 24.4},
+    "Stefanos Tsitsipas": {"Clay": 2080, "Hard": 2000, "Grass": 1900, "Indoor": 1980, "hold_pct": 87.6, "break_pct": 22.3},
+    "Andrey Rublev": {"Clay": 2040, "Hard": 2070, "Grass": 1960, "Indoor": 2050, "hold_pct": 85.8, "break_pct": 24.9},
+    "Alex de Minaur": {"Clay": 1920, "Hard": 2080, "Grass": 2040, "Indoor": 2020, "hold_pct": 83.2, "break_pct": 29.4},
+    "Grigor Dimitrov": {"Clay": 1950, "Hard": 2040, "Grass": 1990, "Indoor": 2030, "hold_pct": 86.4, "break_pct": 22.8},
+    "Tommy Paul": {"Clay": 1930, "Hard": 2020, "Grass": 1970, "Indoor": 1960, "hold_pct": 84.1, "break_pct": 26.5},
+    "Holger Rune": {"Clay": 2020, "Hard": 2030, "Grass": 1930, "Indoor": 2060, "hold_pct": 85.2, "break_pct": 24.6},
+    "Hubert Hurkacz": {"Clay": 1880, "Hard": 2050, "Grass": 2080, "Indoor": 2040, "hold_pct": 91.8, "break_pct": 18.2},
+    "Ben Shelton": {"Clay": 1860, "Hard": 2030, "Grass": 1940, "Indoor": 1990, "hold_pct": 88.9, "break_pct": 19.5},
+    "Jack Draper": {"Clay": 1890, "Hard": 2040, "Grass": 2010, "Indoor": 2000, "hold_pct": 87.5, "break_pct": 24.1},
+    "Lorenzo Musetti": {"Clay": 2040, "Hard": 1930, "Grass": 2010, "Indoor": 1910, "hold_pct": 82.8, "break_pct": 23.9},
+    "Frances Tiafoe": {"Clay": 1870, "Hard": 2010, "Grass": 1960, "Indoor": 1970, "hold_pct": 84.9, "break_pct": 22.6},
+    "Arthur Fils": {"Clay": 1970, "Hard": 1990, "Grass": 1880, "Indoor": 1980, "hold_pct": 85.0, "break_pct": 23.2},
+    "Ugo Humbert": {"Clay": 1840, "Hard": 2010, "Grass": 1970, "Indoor": 2060, "hold_pct": 86.2, "break_pct": 21.9},
+    "Sebastian Korda": {"Clay": 1910, "Hard": 1990, "Grass": 1970, "Indoor": 1950, "hold_pct": 84.4, "break_pct": 24.0},
+    "Tomas Machac": {"Clay": 1890, "Hard": 1980, "Grass": 1860, "Indoor": 1960, "hold_pct": 83.5, "break_pct": 25.1},
+    "Jakub Mensik": {"Clay": 1860, "Hard": 1960, "Grass": 1840, "Indoor": 1940, "hold_pct": 85.6, "break_pct": 21.4},
+    "Jordan Thompson": {"Clay": 1780, "Hard": 1940, "Grass": 1950, "Indoor": 1900, "hold_pct": 82.5, "break_pct": 22.1},
+    "Alexei Popyrin": {"Clay": 1890, "Hard": 1970, "Grass": 1870, "Indoor": 1910, "hold_pct": 85.3, "break_pct": 19.8},
+    "Matteo Berrettini": {"Clay": 1950, "Hard": 1960, "Grass": 2060, "Indoor": 1940, "hold_pct": 90.1, "break_pct": 18.5},
+    "Gael Monfils": {"Clay": 1890, "Hard": 1940, "Grass": 1860, "Indoor": 1930, "hold_pct": 83.9, "break_pct": 23.4},
+    "Dominic Thiem": {"Clay": 1920, "Hard": 1840, "Grass": 1760, "Indoor": 1820, "hold_pct": 80.5, "break_pct": 22.0},
+
+    # WTA Top Elite
+    "Iga Swiatek": {"Clay": 2310, "Hard": 2190, "Grass": 1990, "Indoor": 2140, "hold_pct": 83.1, "break_pct": 46.8},
+    "Aryna Sabalenka": {"Clay": 2105, "Hard": 2255, "Grass": 2095, "Indoor": 2190, "hold_pct": 85.0, "break_pct": 39.1},
+    "Coco Gauff": {"Clay": 2095, "Hard": 2135, "Grass": 2005, "Indoor": 2080, "hold_pct": 74.8, "break_pct": 43.2},
+    "Elena Rybakina": {"Clay": 2030, "Hard": 2160, "Grass": 2190, "Indoor": 2140, "hold_pct": 85.6, "break_pct": 34.4},
+    "Jasmine Paolini": {"Clay": 2090, "Hard": 2050, "Grass": 2030, "Indoor": 1990, "hold_pct": 73.5, "break_pct": 41.5},
+    "Zheng Qinwen": {"Clay": 2070, "Hard": 2110, "Grass": 1930, "Indoor": 2050, "hold_pct": 81.2, "break_pct": 35.8},
+    "Jessica Pegula": {"Clay": 1970, "Hard": 2130, "Grass": 2020, "Indoor": 2060, "hold_pct": 78.4, "break_pct": 40.5},
+    "Emma Navarro": {"Clay": 2010, "Hard": 2060, "Grass": 1980, "Indoor": 1990, "hold_pct": 74.2, "break_pct": 39.8},
+    "Danielle Collins": {"Clay": 2040, "Hard": 2080, "Grass": 1970, "Indoor": 2010, "hold_pct": 79.5, "break_pct": 38.6},
+    "Daria Kasatkina": {"Clay": 2050, "Hard": 2010, "Grass": 1960, "Indoor": 1980, "hold_pct": 68.5, "break_pct": 45.2},
+    "Mirra Andreeva": {"Clay": 2030, "Hard": 2020, "Grass": 1940, "Indoor": 1970, "hold_pct": 73.8, "break_pct": 42.1},
+    "Marta Kostyuk": {"Clay": 1960, "Hard": 2010, "Grass": 1950, "Indoor": 1940, "hold_pct": 72.4, "break_pct": 39.0},
+    "Paula Badosa": {"Clay": 2030, "Hard": 2020, "Grass": 1940, "Indoor": 1980, "hold_pct": 78.0, "break_pct": 36.5},
+    "Donna Vekic": {"Clay": 1920, "Hard": 1990, "Grass": 2060, "Indoor": 1980, "hold_pct": 77.2, "break_pct": 34.0},
+    "Barbora Krejcikova": {"Clay": 2060, "Hard": 1990, "Grass": 2080, "Indoor": 1970, "hold_pct": 76.5, "break_pct": 39.2},
+    "Diana Shnaider": {"Clay": 1960, "Hard": 2000, "Grass": 1980, "Indoor": 1960, "hold_pct": 75.0, "break_pct": 37.8},
+    "Leylah Fernandez": {"Clay": 1920, "Hard": 1990, "Grass": 1930, "Indoor": 1960, "hold_pct": 74.5, "break_pct": 37.0},
+    "Naomi Osaka": {"Clay": 1820, "Hard": 2040, "Grass": 1840, "Indoor": 1990, "hold_pct": 82.8, "break_pct": 31.5},
+    "Ons Jabeur": {"Clay": 2010, "Hard": 1980, "Grass": 2090, "Indoor": 1940, "hold_pct": 75.8, "break_pct": 38.0},
 }
+
+
+def resolve_tennis_player_stats(name: str, circuit_category: str = "") -> Dict[str, Any]:
+    """
+    Intelligently resolves surface Elo and hold/break metrics for any global tennis player.
+    Supports full names, abbreviations, and circuit-tier baseline calibration
+    (ATP, WTA, Challenger, ITF).
+    """
+    cleaned = re.sub(r"\s*\(\d+\)", "", name).strip()
+    # 1. Exact match
+    if cleaned in TENNIS_SURFACE_ELO_REGISTRY:
+        return TENNIS_SURFACE_ELO_REGISTRY[cleaned]
+
+    # 2. Case-insensitive or partial match
+    cleaned_lower = cleaned.lower()
+    for reg_name, stats in TENNIS_SURFACE_ELO_REGISTRY.items():
+        if reg_name.lower() == cleaned_lower:
+            return stats
+
+    # 3. Last name match
+    parts = re.split(r"[\s,/]+", cleaned)
+    last_name = parts[-1].lower() if len(parts) > 1 else parts[0].lower()
+    for reg_name, stats in TENNIS_SURFACE_ELO_REGISTRY.items():
+        reg_parts = reg_name.split()
+        if reg_parts[-1].lower() == last_name:
+            return stats
+
+    # 4. Calibrated Baseline by Circuit Category
+    cat_lower = circuit_category.lower()
+    if "challenger" in cat_lower or "125" in cat_lower:
+        base_elo = 1720
+        hold = 81.0
+        brk = 23.0
+    elif "itf" in cat_lower or "futures" in cat_lower or "m25" in cat_lower or "w15" in cat_lower or "w35" in cat_lower:
+        base_elo = 1580
+        hold = 76.0
+        brk = 25.0
+    elif "wta" in cat_lower:
+        base_elo = 1820
+        hold = 73.0
+        brk = 38.0
+    else:
+        # Default Tour baseline
+        base_elo = 1840
+        hold = 80.0
+        brk = 24.0
+
+    return {
+        "Clay": base_elo - 20,
+        "Hard": base_elo,
+        "Grass": base_elo - 30,
+        "Indoor": base_elo,
+        "hold_pct": hold,
+        "break_pct": brk,
+    }
 
 
 def enrich_event_metrics(event: Dict[str, Any]) -> Dict[str, Any]:
@@ -114,6 +210,7 @@ def enrich_event_metrics(event: Dict[str, Any]) -> Dict[str, Any]:
     home_name = event.get("home_participant", "")
     away_name = event.get("away_participant", "")
     surface = event.get("surface") or "Hard"
+    meta = event.get("official_metadata", {})
 
     model_params: Dict[str, Any] = {}
 
@@ -153,16 +250,35 @@ def enrich_event_metrics(event: Dict[str, Any]) -> Dict[str, Any]:
             "variance_dampener": 1.0,
         })
     elif sport == "tennis":
-        home_stats = TENNIS_SURFACE_ELO_REGISTRY.get(home_name, {"Clay": 1800, "Hard": 1800, "Grass": 1800, "hold_pct": 78.0, "break_pct": 22.0})
-        away_stats = TENNIS_SURFACE_ELO_REGISTRY.get(away_name, {"Clay": 1800, "Hard": 1800, "Grass": 1800, "hold_pct": 78.0, "break_pct": 22.0})
-        surf_key = surface if surface in ["Clay", "Hard", "Grass"] else "Hard"
+        circuit_cat = meta.get("circuit_category", "") or meta.get("tournament", "")
+        home_stats = resolve_tennis_player_stats(home_name, circuit_cat)
+        away_stats = resolve_tennis_player_stats(away_name, circuit_cat)
+
+        surf_key = "Indoor" if event.get("is_indoor") and "Indoor" in home_stats else surface
+        if surf_key not in ["Clay", "Hard", "Grass", "Indoor"]:
+            surf_key = "Hard"
+
+        home_elo = home_stats.get(surf_key, 1800)
+        away_elo = away_stats.get(surf_key, 1800)
+
+        # Detect live inflection signals for The Geter Principle Quantum Governor
+        h_lines = meta.get("home_linescores", [])
+        a_lines = meta.get("away_linescores", [])
+        total_games_played = sum(h_lines) + sum(a_lines)
+        is_deciding_set = len(h_lines) >= 2 and abs(len(h_lines) - len(a_lines)) == 0
+
         model_params.update({
-            "home_surface_elo": home_stats.get(surf_key, 1800),
-            "away_surface_elo": away_stats.get(surf_key, 1800),
+            "home_surface_elo": home_elo,
+            "away_surface_elo": away_elo,
             "home_hold_pct": home_stats.get("hold_pct", 78.0),
             "away_hold_pct": away_stats.get("hold_pct", 78.0),
+            "home_break_pct": home_stats.get("break_pct", 24.0),
+            "away_break_pct": away_stats.get("break_pct", 24.0),
             "surface_k_factor": 32,
             "variance_dampener": 0.96,
+            "total_games_played": total_games_played,
+            "is_deciding_set": is_deciding_set,
+            "quantum_leverage_index": 0.82 if is_deciding_set else 0.35,
         })
 
     event["model_params"] = model_params
@@ -215,7 +331,7 @@ def fetch_mlb_statsapi_failover(date_str: Optional[str] = None) -> List[Dict[str
                         "status": status,
                         "home_score": home_score,
                         "away_score": away_score,
-                        "actual_winner": home_team if status == "completed" and home_score > away_score else (away_team if status == "completed" and away_score > home_score else None),
+                        "actual_winner": home_team if status == "completed" and home_score is not None and away_score is not None and home_score > away_score else (away_team if status == "completed" and home_score is not None and away_score is not None and away_score > home_score else None),
                         "market_odds": {"bookmaker": "Consensus", "home_moneyline": -115, "away_moneyline": -105, "total_line": 8.5},
                         "official_metadata": {"source": "Tier 2 (MLB StatsAPI Failover)", "game_pk": game_pk},
                     })

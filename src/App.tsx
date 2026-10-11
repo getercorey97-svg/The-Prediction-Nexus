@@ -152,12 +152,13 @@ export default function App() {
               else if (tab === 'post-mortem') setActiveTab('post-mortem');
               else if (tab === 'upgrades') setActiveTab('upgrades');
               else if (tab === 'sql-ddl') setActiveTab('sql-ddl');
+              else if (tab === 'tennis') setActiveTab('tennis');
             }}
           />
         )}
 
         {activeTab === 'tennis' && (
-          <TennisPredictorView />
+          <TennisPredictorView events={events} />
         )}
 
         {activeTab === 'simulation-lab' && (

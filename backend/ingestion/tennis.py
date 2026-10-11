@@ -1,9 +1,9 @@
 """
 The Prediction Nexus: Tennis Data Ingestion Module
 ===================================================
-Tracks live ATP/WTA match cards, surface-specific Elo ratings,
+Tracks live ATP/WTA/Challenger/ITF match cards, surface-specific Elo ratings,
 and scans critical break point / tiebreak inflection moments for The Geter Principle.
-Integrates with the 3-Tier Multi-Scraper pipeline (Tier 1 ESPN hidden API + Tier 2 Surface Elo).
+Integrates with the 3-Tier Multi-Scraper pipeline (Tier 1 ESPN hidden API + SofaScore 24/7 + Tier 2 Surface Elo).
 """
 
 from __future__ import annotations
@@ -12,14 +12,14 @@ import math
 import logging
 from typing import List, Dict, Any, Tuple
 
-from .tier2_metrics import TENNIS_SURFACE_ELO_REGISTRY
+from .tier2_metrics import resolve_tennis_player_stats, TENNIS_SURFACE_ELO_REGISTRY
 
 logger = logging.getLogger("nexus.ingestion.tennis")
 
 
 def ingest_tennis_slate() -> List[Dict[str, Any]]:
     """
-    Ingests live ATP/WTA match cards, surface metadata, and enriched Elo ratings
+    Ingests live ATP/WTA/Challenger/ITF match cards, surface metadata, and enriched Elo ratings
     via the 3-Tier Multi-Scraper pipeline. Zero static mock fallback.
     """
     from .tier_orchestrator import get_live_events
@@ -27,12 +27,10 @@ def ingest_tennis_slate() -> List[Dict[str, Any]]:
 
 
 def get_player_surface_elo(player_name: str, surface: str = "Hard") -> float:
-    """Returns player surface-specific Elo rating."""
+    """Returns player surface-specific Elo rating using the intelligent global resolver."""
     surface_norm = surface.capitalize() if surface else "Hard"
-    player_data = TENNIS_SURFACE_ELO_REGISTRY.get(player_name)
-    if player_data:
-        return float(player_data.get(surface_norm, 1800.0))
-    return 1500.0
+    stats = resolve_tennis_player_stats(player_name)
+    return float(stats.get(surface_norm, 1800.0))
 
 
 def scan_tennis_inflection_state(

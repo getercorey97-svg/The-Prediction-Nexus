@@ -2,12 +2,13 @@
 The Prediction Nexus: Unified 3-Tier Multi-Scraper & Cross-Enrichment Orchestrator
 ==================================================================================
 Coordinates the 3-Tier Ingestion Architecture across MLB, CFB, NFL, and Tennis:
-- Tier 1: Primary Live Scraper (ESPN Hidden API)
-- Tier 2: Advanced Metrics Enricher & Secondary Scraper (MLB StatsAPI / FIP / EPA / Havoc / Elo)
+- Tier 1: Primary Live Scrapers (ESPN Hidden API + SofaScore 24/7 Global Tennis)
+- Tier 2: Advanced Metrics Enricher & Secondary Scraper (MLB StatsAPI / FIP / EPA / Havoc / Surface Elo)
 - Tier 3: Environmental Enricher & Stadium Weather (Open-Meteo API / Domes / Fatigue)
 
 Directly upserts normalized events into Supabase PostgreSQL using SUPABASE_SERVICE_ROLE_KEY
-with non-destructive merge policy on external_id.
+with non-destructive merge policy on external_id, preserving simulated predictions.
+Prioritizes Tennis matches and eliminates all artificial query caps.
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ import requests
 from .tier1_espn import fetch_rolling_window_events
 from .tier2_metrics import enrich_event_metrics, fetch_mlb_statsapi_failover
 from .tier3_environment import enrich_event_environment
+from .tennis_global import fetch_global_tennis_slate
 
 logger = logging.getLogger("nexus.ingestion.orchestrator")
 
@@ -90,18 +92,29 @@ def upsert_events_to_supabase(events: List[Dict[str, Any]]) -> int:
 def ingest_sport_live(sport: str) -> List[Dict[str, Any]]:
     """
     Executes 3-Tier Multi-Scraper and Cross-Enrichment for a specific sport.
+    For Tennis, triggers the high-volume 24/7 global multi-source pipeline (SofaScore + ESPN + Challenger/ITF).
     """
     sport_key = sport.lower().strip()
     logger.info(f"Executing 3-Tier Ingestion Pipeline for {sport_key.upper()}...")
 
-    # Step 1: Tier 1 (Primary Live Scraper - ESPN Hidden API)
-    raw_events = fetch_rolling_window_events(sport_key, days_ahead=7)
+    raw_events: List[Dict[str, Any]] = []
 
-    # Step 2: Circuit Breaker Failover if Tier 1 returned 0 events
-    if not raw_events:
-        logger.warning(f"Tier 1 returned 0 events for {sport_key}. Activating Tier 2 Failover Scraper...")
-        if sport_key == "mlb":
-            raw_events = fetch_mlb_statsapi_failover()
+    if sport_key == "tennis":
+        # Multi-Source Simultaneous Ingestion for 24/7 Global Tennis
+        try:
+            raw_events = fetch_global_tennis_slate()
+        except Exception as e:
+            logger.warning(f"Global tennis scraper error ({e}); falling back to ESPN rolling feed.")
+            raw_events = fetch_rolling_window_events("tennis", days_ahead=7)
+    else:
+        # Step 1: Tier 1 (Primary Live Scraper - ESPN Hidden API)
+        raw_events = fetch_rolling_window_events(sport_key, days_ahead=7)
+
+        # Step 2: Circuit Breaker Failover if Tier 1 returned 0 events
+        if not raw_events:
+            logger.warning(f"Tier 1 returned 0 events for {sport_key}. Activating Tier 2 Failover Scraper...")
+            if sport_key == "mlb":
+                raw_events = fetch_mlb_statsapi_failover()
 
     if not raw_events:
         logger.info(f"No active games found in current calendar window for {sport_key}.")
@@ -110,7 +123,7 @@ def ingest_sport_live(sport: str) -> List[Dict[str, Any]]:
     # Step 3: Cross-Source Enrichment (Tiers 2 & 3)
     enriched_events: List[Dict[str, Any]] = []
     for ev in raw_events:
-        # Tier 2: Advanced Metrics (FIP, BaseRuns, EPA, Havoc, Surface Elo)
+        # Tier 2: Advanced Metrics (FIP, BaseRuns, EPA, Havoc, Surface Elo, Momentum)
         ev = enrich_event_metrics(ev)
 
         # Tier 3: Environmental (Live Open-Meteo Weather, Dome check, rest differential)
@@ -126,10 +139,16 @@ def ingest_sport_live(sport: str) -> List[Dict[str, Any]]:
 
 def run_unified_ingestion_pipeline(sport_filter: Optional[str] = None) -> List[Dict[str, Any]]:
     """
-    Runs the full ingestion pipeline across all 4 sports (or single specified sport)
-    and persists directly to Supabase.
+    Runs the full ingestion pipeline, prioritizing Tennis first to guarantee
+    coverage across global tours, followed by MLB, CFB, and NFL.
+    Persists batch directly to Supabase.
     """
-    sports = [sport_filter.lower().strip()] if sport_filter else ["mlb", "cfb", "nfl", "tennis"]
+    # Prioritize Tennis first in pipeline order
+    if sport_filter:
+        sports = [sport_filter.lower().strip()]
+    else:
+        sports = ["tennis", "mlb", "cfb", "nfl"]
+
     all_events: List[Dict[str, Any]] = []
 
     for sp in sports:
@@ -139,7 +158,7 @@ def run_unified_ingestion_pipeline(sport_filter: Optional[str] = None) -> List[D
         except Exception as exc:
             logger.error(f"Error executing 3-Tier ingestion for {sp}: {exc}", exc_info=True)
 
-    # Persist batch to Supabase
+    # Persist batch to Supabase without truncation
     if all_events:
         upsert_events_to_supabase(all_events)
 
@@ -148,7 +167,7 @@ def run_unified_ingestion_pipeline(sport_filter: Optional[str] = None) -> List[D
 
 def get_live_events(sport_filter: Optional[str] = None) -> List[Dict[str, Any]]:
     """
-    Returns live sporting events from memory registry.
+    Returns live sporting events from memory registry without any artificial cap.
     If registry is empty, triggers immediate synchronous live ingestion.
     """
     if not LIVE_EVENTS_IN_MEMORY_REGISTRY:
@@ -159,7 +178,7 @@ def get_live_events(sport_filter: Optional[str] = None) -> List[Dict[str, Any]]:
         sp_norm = sport_filter.lower().strip()
         events = [e for e in events if e.get("sport", "").lower() == sp_norm]
 
-    # Sort scheduled and in_progress first, followed by completed
+    # Sort status: in_progress first, scheduled second, completed third
     status_priority = {"in_progress": 0, "scheduled": 1, "completed": 2, "postponed": 3}
     events.sort(key=lambda x: (status_priority.get(x.get("status", "scheduled"), 4), x.get("event_date", "")))
 
