@@ -206,7 +206,7 @@ export default function App() {
           The Prediction Nexus · Autonomous Sports Quantitative Platform
         </div>
         <div className="flex items-center gap-4 text-[11px] font-mono text-slate-400">
-          <span>FastAPI + Celery</span>
+          <span>Vercel Serverless (Python FastAPI)</span>
           <span>·</span>
           <span>50,003 NumPy Monte Carlo</span>
           <span>·</span>

@@ -12,7 +12,7 @@ const getEnvVar = (viteKey: string, nextKey: string, fallback: string): string =
 export const API_BASE_URL = getEnvVar(
   'VITE_API_URL',
   'NEXT_PUBLIC_API_URL',
-  'https://nexus-api-3qk0.onrender.com'
+  ''
 ).replace(/\/$/, '');
 
 export const SUPABASE_URL = getEnvVar(

@@ -100,11 +100,11 @@ export const SimulationLabView: React.FC<SimulationLabViewProps> = ({ events }) 
         <div className="flex items-center gap-3 text-xs font-mono">
           <div className="px-3 py-1.5 bg-[#0e1422] border border-white/[0.08] rounded-md text-slate-300 flex items-center gap-2">
             <span className="w-2 h-2 rounded-full bg-emerald-500" />
-            <span>FastAPI ASGI Gateway</span>
+            <span>Vercel Python Serverless</span>
           </div>
           <div className="px-3 py-1.5 bg-[#0e1422] border border-white/[0.08] rounded-md text-slate-300 flex items-center gap-2">
-            <span className="w-2 h-2 rounded-full bg-emerald-500" />
-            <span>Celery + Redis Queue</span>
+            <span className="w-2 h-2 rounded-full bg-cyan-400" />
+            <span>Supabase Realtime REST</span>
           </div>
         </div>
       </div>
@@ -393,14 +393,14 @@ export const SimulationLabView: React.FC<SimulationLabViewProps> = ({ events }) 
             </div>
           )}
 
-          {/* Celery Asynchronous Architecture & Free Ingestor Status */}
+          {/* Vercel Serverless Architecture & Multi-Source Ingestor Status */}
           <div className="p-4 bg-[#080c14] border border-white/[0.08] rounded-lg text-xs space-y-3">
             <div className="flex items-center justify-between">
               <span className="font-semibold text-white font-mono flex items-center gap-2">
                 <Server className="w-3.5 h-3.5 text-emerald-400" />
-                <span>Free Sports Data Ingestors & Render Architecture</span>
+                <span>Multi-Source Ingestors & Vercel Serverless Pipeline</span>
               </span>
-              <span className="font-mono text-emerald-400 text-[11px]">Render Free-Tier Ready</span>
+              <span className="font-mono text-emerald-400 text-[11px]">100% Serverless Native</span>
             </div>
 
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 font-mono text-[11px]">

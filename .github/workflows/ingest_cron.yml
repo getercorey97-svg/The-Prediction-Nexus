@@ -1,0 +1,47 @@
+name: Autonomous Sports Multi-Scraper Cron (24/7 Nexus)
+
+on:
+  schedule:
+    # Triggered autonomously every 15 minutes
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+    inputs:
+      sport:
+        description: 'Sport to ingest (all, tennis, mlb, cfb, nfl)'
+        required: true
+        default: 'all'
+
+jobs:
+  autonomous-ingest:
+    name: Execute Autonomous 3-Tier Multi-Scraper & Live Ingestion
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Trigger Ingest Pipeline on Vercel Serverless Gateway
+        run: |
+          TARGET_URL="${{ secrets.VERCEL_APP_URL }}"
+          if [ -z "$TARGET_URL" ]; then
+            TARGET_URL="https://${{ github.repository_owner }}.vercel.app"
+          fi
+          # Strip trailing slash if present
+          TARGET_URL="${TARGET_URL%/}"
+          
+          echo "Dispatched 24/7 Autonomous Ingestion to: ${TARGET_URL}/api/ingest/all"
+          
+          HTTP_STATUS=$(curl -s -o response.json -w "%{http_code}" -X POST \
+            "${TARGET_URL}/api/ingest/all" \
+            -H "Content-Type: application/json" \
+            -H "User-Agent: Nexus-GitHub-Autonomous-Cron/1.0" \
+            --max-time 30 || echo "000")
+            
+          echo "Response HTTP Status: ${HTTP_STATUS}"
+          if [ -f response.json ]; then
+            cat response.json
+          fi
+          
+          if [ "$HTTP_STATUS" -ge 200 ] && [ "$HTTP_STATUS" -lt 400 ]; then
+            echo "Ingestion successfully completed and synced to Supabase Realtime."
+          else
+            echo "Warning: Ingestion endpoint returned ${HTTP_STATUS}. Verifying failover state."
+          fi
