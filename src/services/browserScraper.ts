@@ -94,59 +94,49 @@ function parseEspnTennisEvents(data: any, circuit: 'atp' | 'wta'): SportingEvent
       const competitors = comp.competitors || [];
       if (competitors.length < 2) continue;
 
-      let homeParticipant = '';
-      let awayParticipant = '';
-      let homeScore: number | null = null;
-      let awayScore: number | null = null;
-      let homeLinescores: number[] = [];
-      let awayLinescores: number[] = [];
-      let homeWinner = false;
-      let awayWinner = false;
-
-      for (const c of competitors) {
-        // Fix: prioritize athlete displayName instead of team displayName
-        const ath = c.athlete || {};
-        const ros = c.roster || {};
-        const tea = c.team || {};
-        const name = (
-          ath.displayName ||
-          ath.fullName ||
-          ros.displayName ||
-          tea.displayName ||
-          c.name ||
-          ''
-        ).trim();
-
-        if (!name) continue;
-
-        const isHome = c.homeAway === 'home' || c.order === 0;
-        const scoreVal = c.score != null && !isNaN(Number(c.score)) ? Number(c.score) : null;
-        const isWinner = c.winner === true;
-
-        const lscores: number[] = [];
-        if (Array.isArray(c.linescores)) {
-          for (const ls of c.linescores) {
-            const v = typeof ls === 'object' && ls !== null ? ls.value : ls;
-            if (v != null && !isNaN(Number(v))) {
-              lscores.push(Number(v));
+      // Extract candidate athletes
+      const parsedAthletes = competitors
+        .map((c: any) => {
+          const ath = c.athlete || {};
+          const ros = c.roster || {};
+          const tea = c.team || {};
+          const name = (
+            ath.displayName ||
+            ath.fullName ||
+            ros.displayName ||
+            tea.displayName ||
+            c.name ||
+            ''
+          ).trim();
+          const scoreVal = c.score != null && !isNaN(Number(c.score)) ? Number(c.score) : null;
+          const isWinner = c.winner === true;
+          const lscores: number[] = [];
+          if (Array.isArray(c.linescores)) {
+            for (const ls of c.linescores) {
+              const v = typeof ls === 'object' && ls !== null ? ls.value : ls;
+              if (v != null && !isNaN(Number(v))) {
+                lscores.push(Number(v));
+              }
             }
           }
-        }
+          const isHome = c.homeAway === 'home' || c.order === 1;
+          return { name, scoreVal, isWinner, lscores, isHome };
+        })
+        .filter((c: any) => c.name.length > 0);
 
-        if (isHome) {
-          homeParticipant = name;
-          homeScore = scoreVal;
-          homeLinescores = lscores;
-          homeWinner = isWinner;
-        } else {
-          awayParticipant = name;
-          awayScore = scoreVal;
-          awayLinescores = lscores;
-          awayWinner = isWinner;
-        }
-      }
+      if (parsedAthletes.length < 2) continue;
 
-      if (!homeParticipant || !awayParticipant) continue;
+      const homeComp = parsedAthletes.find((c: any) => c.isHome) || parsedAthletes[0];
+      const awayComp = parsedAthletes.find((c: any) => !c.isHome && c !== homeComp) || parsedAthletes[1];
+
+      const homeParticipant = homeComp.name;
+      const awayParticipant = awayComp.name;
+      const homeScore = homeComp.scoreVal;
+      const awayScore = awayComp.scoreVal;
+      const homeLinescores = homeComp.lscores;
+      const awayLinescores = awayComp.lscores;
+      const homeWinner = homeComp.isWinner;
+      const awayWinner = awayComp.isWinner;
 
       const dateStr = comp.date || ev.date || new Date().toISOString();
       const dedupKey = makeTennisDedupKey(homeParticipant, awayParticipant, dateStr);
@@ -217,34 +207,29 @@ function parseEspnTeamSportEvents(data: any, sport: 'mlb' | 'cfb' | 'nfl'): Spor
     const competitors = comp.competitors || [];
     if (competitors.length < 2) continue;
 
-    let homeParticipant = '';
-    let awayParticipant = '';
-    let homeScore: number | null = null;
-    let awayScore: number | null = null;
-    let homeWinner = false;
-    let awayWinner = false;
+    // Extract candidate teams
+    const parsedTeams = competitors
+      .map((c: any) => {
+        const tea = c.team || {};
+        const name = (tea.displayName || tea.name || c.name || '').trim();
+        const scoreVal = c.score != null && !isNaN(Number(c.score)) ? Number(c.score) : null;
+        const isWinner = c.winner === true;
+        const isHome = c.homeAway === 'home' || c.order === 0;
+        return { name, scoreVal, isWinner, isHome };
+      })
+      .filter((c: any) => c.name.length > 0);
 
-    for (const c of competitors) {
-      const tea = c.team || {};
-      const name = (tea.displayName || tea.name || c.name || '').trim();
-      if (!name) continue;
+    if (parsedTeams.length < 2) continue;
 
-      const isHome = c.homeAway === 'home';
-      const scoreVal = c.score != null && !isNaN(Number(c.score)) ? Number(c.score) : null;
-      const isWinner = c.winner === true;
+    const homeComp = parsedTeams.find((c: any) => c.isHome) || parsedTeams[0];
+    const awayComp = parsedTeams.find((c: any) => !c.isHome && c !== homeComp) || parsedTeams[1];
 
-      if (isHome) {
-        homeParticipant = name;
-        homeScore = scoreVal;
-        homeWinner = isWinner;
-      } else {
-        awayParticipant = name;
-        awayScore = scoreVal;
-        awayWinner = isWinner;
-      }
-    }
-
-    if (!homeParticipant || !awayParticipant) continue;
+    const homeParticipant = homeComp.name;
+    const awayParticipant = awayComp.name;
+    const homeScore = homeComp.scoreVal;
+    const awayScore = awayComp.scoreVal;
+    const homeWinner = homeComp.isWinner;
+    const awayWinner = awayComp.isWinner;
 
     const statusState = (comp.status?.type?.state || 'pre').toLowerCase();
     let status: 'scheduled' | 'in_progress' | 'completed' = 'scheduled';

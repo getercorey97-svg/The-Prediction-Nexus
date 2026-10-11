@@ -63,7 +63,7 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
   const avgBrier =
     postMortems.length > 0
       ? (postMortems.reduce((acc, pm) => acc + pm.brier_score, 0) / postMortems.length).toFixed(6)
-      : '0.048200';
+      : 'Awaiting Final Outcomes';
 
   const handleRefreshSlate = async () => {
     setIsRefreshing(true);
@@ -179,7 +179,9 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
 
         <div className="p-4 bg-[#0e1422] rounded-lg border border-white/[0.08]">
           <div className="text-xs font-medium text-slate-400">Average Brier Score</div>
-          <div className="mt-1 text-2xl font-bold font-mono tabular-nums text-emerald-400">{avgBrier}</div>
+          <div className={`mt-1 font-bold font-mono tabular-nums ${postMortems.length > 0 ? 'text-2xl text-emerald-400' : 'text-sm text-slate-400 py-1'}`}>
+            {avgBrier}
+          </div>
           <div className="mt-1 text-xs text-slate-500">Benchmark vs 0.250 uncalibrated coin</div>
         </div>
 
@@ -244,8 +246,12 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
                     <td className="py-3 px-4 font-mono tabular-nums text-center text-slate-400">
                       {fw.learning_rate.toFixed(3)}
                     </td>
-                    <td className="py-3 px-4 font-mono tabular-nums text-right font-medium text-emerald-400">
-                      {fw.cumulative_brier_score !== null ? fw.cumulative_brier_score.toFixed(6) : '0.048200'}
+                    <td className="py-3 px-4 font-mono tabular-nums text-right font-medium">
+                      {fw.cumulative_brier_score !== null && fw.cumulative_brier_score !== undefined ? (
+                        <span className="text-emerald-400">{fw.cumulative_brier_score.toFixed(6)}</span>
+                      ) : (
+                        <span className="text-slate-400 text-xs italic">Awaiting Final Outcomes</span>
+                      )}
                     </td>
                     <td className="py-3 px-4 text-right">
                       <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[11px] font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-mono">

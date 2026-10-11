@@ -232,84 +232,60 @@ class NexusDatabaseStore {
     this.notify();
 
     try {
-      this.addRealtimeLog('system', 'UPDATE', `Triggered 3-Tier Multi-Scraper pipeline refresh for: ${sport.toUpperCase()}`);
+      this.addRealtimeLog('system', 'UPDATE', `Initiating instant client-side ESPN scoreboard ingestion across: ${sport.toUpperCase()}`);
 
-      // Attempt 1: Direct HTTP request to Serverless Ingest endpoint with 8s timeout
-      let apiEvents: any[] = [];
-      let apiSucceeded = false;
-
-      try {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 8000);
-        const endpoint = sport === 'all' ? '/api/ingest/all' : `/api/ingest/${sport.toLowerCase()}`;
-        const url = `${API_BASE_URL}${endpoint}`;
-
-        const res = await fetch(url, {
-          method: 'POST',
-          signal: controller.signal,
-          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-        });
-        clearTimeout(timeoutId);
-
-        if (res.ok) {
-          const json = await res.json();
-          if (Array.isArray(json.events) && json.events.length > 0) {
-            apiEvents = json.events;
-            apiSucceeded = true;
-          } else if (json.ingested_count > 0) {
-            const fetched = await fetchLiveEventsApi(sport === 'all' ? undefined : sport);
-            if (fetched && fetched.length > 0) {
-              apiEvents = fetched;
-              apiSucceeded = true;
-            }
-          }
-        }
-      } catch (err: any) {
-        console.warn('[NexusStore] Serverless /api/ingest failed or timed out (>8s):', err?.message || err);
-      }
-
-      if (apiSucceeded && apiEvents.length > 0) {
-        const count = this.ingestEvents(apiEvents);
-        this.addRealtimeLog(
-          'sporting_events',
-          'INSERT',
-          `Hydrated ${count} live sporting events from Vercel Serverless API.`
-        );
-        return { success: true, count, source: 'serverless_api' };
-      }
-
-      // Attempt 2: Instant Client-Side Direct Scraper Fallback (ESPN Public Scoreboards)
-      this.addRealtimeLog(
-        'system',
-        'UPDATE',
-        'Triggering client-side direct scraper fallback via ESPN scoreboards...'
-      );
+      // STEP 1: IMMEDIATELY execute parallel client-side direct fetch to ESPN CORS endpoints
+      // Resolves in < 2 seconds so the UI counters (ALL, TENNIS, MLB, CFB, NFL) hydrate immediately!
       const browserEvents = await scrapeLiveSlateFromBrowser();
 
       if (browserEvents.length > 0) {
-        // Upsert directly into Supabase (non-blocking)
-        await upsertEventsToSupabase(browserEvents);
+        // Filter by sport if a specific sport was requested
+        const targetEvents =
+          sport === 'all'
+            ? browserEvents
+            : browserEvents.filter((e) => e.sport.toLowerCase() === sport.toLowerCase());
 
-        // Update local store state immediately so badges update from 0
-        const count = this.ingestEvents(browserEvents);
+        // Update local store state immediately so badges update from 0 in under 2 seconds!
+        const count = this.ingestEvents(targetEvents.length > 0 ? targetEvents : browserEvents);
+        this.isLoadingLive = false;
+        this.notify();
+
         this.addRealtimeLog(
           'sporting_events',
           'INSERT',
-          `Hydrated ${count} live sporting fixtures directly via ESPN browser fallback.`
+          `Hydrated ${count} live sporting fixtures directly via ESPN browser scraper. Badges updated!`
         );
+
+        // STEP 2: Asynchronously upsert to Supabase in background (non-blocking)
+        upsertEventsToSupabase(browserEvents).catch((err) => {
+          console.warn('[NexusStore] Background Supabase upsert non-fatal error:', err);
+        });
+
+        // STEP 3: Asynchronously notify serverless endpoint in background (non-blocking)
+        const endpoint = sport === 'all' ? '/api/ingest/all' : `/api/ingest/${sport.toLowerCase()}`;
+        fetch(`${API_BASE_URL}${endpoint}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        }).catch(() => {
+          // Non-fatal, serverless function is optional when direct browser scraper has hydrated the slate
+        });
+
         return { success: true, count, source: 'browser_fallback' };
       }
 
-      // Attempt 3: Restore any existing records from Supabase
+      // STEP 4: Fallback to Supabase cache if browser fetch returned 0
       if (isSupabaseConfigured()) {
         const client = getSupabaseClient();
         if (client) {
-          const { data, error } = await client
-            .from('sporting_events')
-            .select('*')
-            .order('event_date', { ascending: true });
+          let query = client.from('sporting_events').select('*').order('event_date', { ascending: true });
+          if (sport !== 'all') {
+            query = query.eq('sport', sport.toLowerCase());
+          }
+          const { data, error } = await query;
           if (!error && data && data.length > 0) {
             const count = this.ingestEvents(data);
+            this.isLoadingLive = false;
+            this.notify();
             this.addRealtimeLog(
               'sporting_events',
               'INSERT',
@@ -318,6 +294,30 @@ class NexusDatabaseStore {
             return { success: true, count, source: 'supabase_cache' };
           }
         }
+      }
+
+      // STEP 5: Fallback to Serverless API if browser & Supabase cache were empty
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 6000);
+        const endpoint = sport === 'all' ? '/api/ingest/all' : `/api/ingest/${sport.toLowerCase()}`;
+        const res = await fetch(`${API_BASE_URL}${endpoint}`, {
+          method: 'POST',
+          signal: controller.signal,
+          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        });
+        clearTimeout(timeoutId);
+        if (res.ok) {
+          const json = await res.json();
+          if (Array.isArray(json.events) && json.events.length > 0) {
+            const count = this.ingestEvents(json.events);
+            this.isLoadingLive = false;
+            this.notify();
+            return { success: true, count, source: 'serverless_api' };
+          }
+        }
+      } catch (e) {
+        // silent
       }
 
       this.lastHydrationError = 'Live slate query completed with 0 fixtures. Showing existing stored events.';
@@ -395,8 +395,11 @@ class NexusDatabaseStore {
     const totalError = Number(Math.abs(actualTotal - prediction.predicted_total_score).toFixed(2));
     const withinInterval = actualMargin >= prediction.p05_score_diff && actualMargin <= prediction.p95_score_diff;
 
-    const baseline = framework?.cumulative_brier_score ?? 0.25;
-    const calibrationDelta = Number((brierScore - baseline).toFixed(6));
+    const baseline = framework?.cumulative_brier_score;
+    const calibrationDelta =
+      baseline !== null && baseline !== undefined
+        ? Number((brierScore - baseline).toFixed(6))
+        : 0.0;
 
     const empiricalNotes = `Empirical Outcome: ${event.home_participant} ${homeScore}, ${event.away_participant} ${awayScore}. Margin: ${actualMargin > 0 ? '+' : ''}${actualMargin} (pred: ${prediction.predicted_home_spread > 0 ? '+' : ''}${prediction.predicted_home_spread}). Total: ${actualTotal} (pred: ${prediction.predicted_total_score}). Brier Score: ${brierScore} (baseline delta: ${calibrationDelta > 0 ? '+' : ''}${calibrationDelta}). 90% MC Interval: [${prediction.p05_score_diff}, ${prediction.p95_score_diff}] -> ${withinInterval ? 'CAPTURED' : 'OUTLIER'}.`;
 
@@ -435,9 +438,15 @@ class NexusDatabaseStore {
       const prevWeights = { ...framework.parameters };
       const adjustedWeights = { ...framework.parameters };
 
-      const prevCumulative = framework.cumulative_brier_score ?? 0.25;
-      const newCumulativeBrier = Number((alpha * brierScore + (1.0 - alpha) * prevCumulative).toFixed(6));
-      const brierDelta = Number((brierScore - prevCumulative).toFixed(6));
+      const prevCumulative = framework.cumulative_brier_score;
+      const newCumulativeBrier =
+        prevCumulative === null || prevCumulative === undefined
+          ? Number(brierScore.toFixed(6))
+          : Number((alpha * brierScore + (1.0 - alpha) * prevCumulative).toFixed(6));
+      const brierDelta =
+        prevCumulative === null || prevCumulative === undefined
+          ? 0.0
+          : Number((brierScore - prevCumulative).toFixed(6));
 
       let actionType: UpgradeActionType = 'ewma_reweight';
       let calibrationNotes = '';
